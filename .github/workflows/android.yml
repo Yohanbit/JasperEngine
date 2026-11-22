@@ -1,0 +1,26 @@
+name: Android APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+      - name: Liberar espacio
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
+          df -h
+      - name: Compilar
+        run: |
+          chmod +x tools/build.sh
+          tools/build.sh android
+      - name: Buscar APK
+        run: find build -name "*.apk" -exec ls -lh {} \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jasperengine-apk
+          path: build/**/*.apk
