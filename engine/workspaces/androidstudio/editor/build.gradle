@@ -17,9 +17,12 @@ tasks.register('syncSharedJava', Sync) {
     }
     into layout.buildDirectory.dir("shared-java")
 }
-// Tied to the Java compile itself, not to preBuild: the android plugin registers its lifecycle
-// tasks after this block, and a name that does not exist makes the dependency silently never run.
+// Tied to the compiler tasks themselves, not to preBuild: the android plugin registers its
+// lifecycle tasks after this block, and a name that does not exist makes the dependency silently
+// never run. Both Java and Kotlin compile read build/shared-java, and Gradle 9 refuses a task that
+// reads another's output without saying so.
 tasks.withType(JavaCompile).configureEach { dependsOn 'syncSharedJava' }
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach { dependsOn 'syncSharedJava' }
 
 android {
     compileSdk 36
