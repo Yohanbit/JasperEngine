@@ -93,6 +93,12 @@
         #include <GL/gl.h>
     #elif defined(__APPLE__)
         #include <OpenGL/gl.h>
+    #elif defined(__ANDROID__)
+        // Android has no desktop OpenGL headers at all: libGLESv3 is the only GL the NDK ships,
+        // and every call this file makes (glGetIntegerv, glPixelStorei, glReadPixels, glGetError
+        // with GL_VIEWPORT/GL_PACK_ALIGNMENT/GL_RGBA/GL_UNSIGNED_BYTE/GL_NO_ERROR) is the same
+        // entry point with the same constants there.
+        #include <GLES3/gl3.h>
     #else
         #include <GL/gl.h>
     #endif
