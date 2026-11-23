@@ -227,7 +227,10 @@ std::string JasperEngineAndroid::getExternalDataPath() {
 jasperengine::VolumeSpace JasperEngineAndroid::getVolumeSpace() {
     // Where a save, a screenshot or an imported asset lands. statfs, not statvfs: Bionic has no
     // statvfs, and this is the same call Android's own StatFs class wraps.
-    const android::SpaceInfo info = android::querySpace(getUserDataPath());
+    // Fully qualified: this file defines the platform class at global scope, so a bare android::
+    // does not resolve (clang: "use of undeclared identifier 'android'; did you mean
+    // 'jasperengine::android'?"). The subsystem lives under jasperengine::android.
+    const jasperengine::android::SpaceInfo info = jasperengine::android::querySpace(getUserDataPath());
     jasperengine::VolumeSpace space;
     space.known = info.known;
     space.totalBytes = info.totalBytes;
