@@ -31,6 +31,7 @@
 #include <game-activity/GameActivity.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -74,6 +75,32 @@ namespace jasperengine::editor {
         // thread safe, so it is queued here and drained once per frame.
         std::mutex gTextMutex;
         std::vector<unsigned int> gPendingCharacters;
+
+
+        // EditorActivity's clipboard methods, looked up once: the loop calls them on every
+        // copy/paste, and GetMethodID is a class lookup, not a cheap call.
+        jmethodID gSetClipboardMethod = nullptr;
+        jmethodID gGetClipboardMethod = nullptr;
+
+        jmethodID clipboardMethod(JNIEnv* env, const char* name, const char* signature){
+            jmethodID* slot = std::strcmp(name, "setEditorClipboardText") == 0
+                ? &gSetClipboardMethod : &gGetClipboardMethod;
+            if (*slot)
+                return *slot;
+            if (!gAndroidApp || !gAndroidApp->activity || !gAndroidApp->activity->clazz)
+                return nullptr;
+            jclass activityClass = env->GetObjectClass(gAndroidApp->activity->clazz);
+            if (!activityClass)
+                return nullptr;
+            *slot = env->GetMethodID(activityClass, name, signature);
+            env->DeleteLocalRef(activityClass);
+            if (env->ExceptionCheck()){
+                // an activity without the method: no clipboard, and no exception left pending
+                env->ExceptionClear();
+                return nullptr;
+            }
+            return *slot;
+        }
 
         double monotonicSeconds(){
             using namespace std::chrono;
@@ -235,6 +262,13 @@ namespace jasperengine::editor {
 
         bool initImGuiPlatform(){
             ImGuiIO& io = ImGui::GetIO();
+
+            // the clipboard: ImGui's text fields (and every name field) need these two
+            ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+            platformIo.Platform_SetClipboardTextFn = &setClipboardText;
+            platformIo.Platform_GetClipboardTextFn = &getClipboardText;
+            platformIo.Platform_ClipboardUserData = nullptr;
+
             io.BackendPlatformUserData = gAndroidApp;
             io.BackendPlatformName = "imgui_impl_jasperengine_android";
             // No OS mouse cursors (a finger has no shape), no OS-set pointer position, and no
@@ -262,10 +296,14 @@ namespace jasperengine::editor {
         if (!gAndroidApp || !gAndroidApp->activity)
             return;
         if (show){
-            // the engine's own call, same flags: a text field's keyboard edits in place
-            constexpr int IME_ACTION_NONE = 1;
-            constexpr int IME_FLAG_NO_FULLSCREEN = 33554432;
-            GameActivity_setImeEditorInfo(gAndroidApp->activity, InputType_dot_TYPE_CLASS_TEXT,
+            // https://developer.android.com/reference/android/text/InputType: the engine's own
+            // choice (NativeEngine.cpp: TYPE_CLASS_TEXT = 1 with IME_FLAG_NO_FULLSCREEN), which is
+            // the value its tested soft keyboard is known to work with. Named here rather than
+            // copied as an opaque constant so a reader can check them against the reference.
+            constexpr int TYPE_CLASS_TEXT = 0x00000001;
+            constexpr int IME_ACTION_NONE = 0x00000001;          // EditorInfo.IME_ACTION_NONE
+            constexpr int IME_FLAG_NO_FULLSCREEN = 0x02000000;   // EditorInfo.IME_FLAG_NO_FULLSCREEN
+            GameActivity_setImeEditorInfo(gAndroidApp->activity, TYPE_CLASS_TEXT,
                                           IME_ACTION_NONE, IME_FLAG_NO_FULLSCREEN);
             GameActivity_showSoftInput(gAndroidApp->activity, 0);
         }else{
@@ -290,6 +328,7 @@ namespace jasperengine::editor {
 
     namespace {
 
+        // one table of keys, used by both the event filter below and the key handler
         ImGuiKey imGuiKeyFromAndroid(int32_t keycode){
             switch (keycode){
                 case AKEYCODE_DEL: return ImGuiKey_Backspace;
@@ -306,21 +345,237 @@ namespace jasperengine::editor {
                 case AKEYCODE_MOVE_END: return ImGuiKey_End;
                 case AKEYCODE_PAGE_UP: return ImGuiKey_PageUp;
                 case AKEYCODE_PAGE_DOWN: return ImGuiKey_PageDown;
+                // a hardware keyboard's letters, digits and punctuation: sent as keys too, so
+                // shortcuts (Ctrl+S and friends) work, and as characters by addImGuiCharacterFor
+                case AKEYCODE_A: return ImGuiKey_A;
+                case AKEYCODE_B: return ImGuiKey_B;
+                case AKEYCODE_C: return ImGuiKey_C;
+                case AKEYCODE_D: return ImGuiKey_D;
+                case AKEYCODE_E: return ImGuiKey_E;
+                case AKEYCODE_F: return ImGuiKey_F;
+                case AKEYCODE_G: return ImGuiKey_G;
+                case AKEYCODE_H: return ImGuiKey_H;
+                case AKEYCODE_I: return ImGuiKey_I;
+                case AKEYCODE_J: return ImGuiKey_J;
+                case AKEYCODE_K: return ImGuiKey_K;
+                case AKEYCODE_L: return ImGuiKey_L;
+                case AKEYCODE_M: return ImGuiKey_M;
+                case AKEYCODE_N: return ImGuiKey_N;
+                case AKEYCODE_O: return ImGuiKey_O;
+                case AKEYCODE_P: return ImGuiKey_P;
+                case AKEYCODE_Q: return ImGuiKey_Q;
+                case AKEYCODE_R: return ImGuiKey_R;
+                case AKEYCODE_S: return ImGuiKey_S;
+                case AKEYCODE_T: return ImGuiKey_T;
+                case AKEYCODE_U: return ImGuiKey_U;
+                case AKEYCODE_V: return ImGuiKey_V;
+                case AKEYCODE_W: return ImGuiKey_W;
+                case AKEYCODE_X: return ImGuiKey_X;
+                case AKEYCODE_Y: return ImGuiKey_Y;
+                case AKEYCODE_Z: return ImGuiKey_Z;
+                case AKEYCODE_0: return ImGuiKey_0;
+                case AKEYCODE_1: return ImGuiKey_1;
+                case AKEYCODE_2: return ImGuiKey_2;
+                case AKEYCODE_3: return ImGuiKey_3;
+                case AKEYCODE_4: return ImGuiKey_4;
+                case AKEYCODE_5: return ImGuiKey_5;
+                case AKEYCODE_6: return ImGuiKey_6;
+                case AKEYCODE_7: return ImGuiKey_7;
+                case AKEYCODE_8: return ImGuiKey_8;
+                case AKEYCODE_9: return ImGuiKey_9;
+                case AKEYCODE_COMMA: return ImGuiKey_Comma;
+                case AKEYCODE_PERIOD: return ImGuiKey_Period;
+                case AKEYCODE_MINUS: return ImGuiKey_Minus;
+                case AKEYCODE_EQUALS: return ImGuiKey_Equal;
+                case AKEYCODE_LEFT_BRACKET: return ImGuiKey_LeftBracket;
+                case AKEYCODE_RIGHT_BRACKET: return ImGuiKey_RightBracket;
+                case AKEYCODE_BACKSLASH: return ImGuiKey_Backslash;
+                case AKEYCODE_SEMICOLON: return ImGuiKey_Semicolon;
+                case AKEYCODE_APOSTROPHE: return ImGuiKey_Apostrophe;
+                case AKEYCODE_SLASH: return ImGuiKey_Slash;
+                case AKEYCODE_GRAVE: return ImGuiKey_GraveAccent;
+                case AKEYCODE_NUMPAD_0: return ImGuiKey_Keypad0;
+                case AKEYCODE_NUMPAD_1: return ImGuiKey_Keypad1;
+                case AKEYCODE_NUMPAD_2: return ImGuiKey_Keypad2;
+                case AKEYCODE_NUMPAD_3: return ImGuiKey_Keypad3;
+                case AKEYCODE_NUMPAD_4: return ImGuiKey_Keypad4;
+                case AKEYCODE_NUMPAD_5: return ImGuiKey_Keypad5;
+                case AKEYCODE_NUMPAD_6: return ImGuiKey_Keypad6;
+                case AKEYCODE_NUMPAD_7: return ImGuiKey_Keypad7;
+                case AKEYCODE_NUMPAD_8: return ImGuiKey_Keypad8;
+                case AKEYCODE_NUMPAD_9: return ImGuiKey_Keypad9;
+                case AKEYCODE_NUMPAD_DOT: return ImGuiKey_KeypadDecimal;
+                case AKEYCODE_NUMPAD_COMMA: return ImGuiKey_KeypadDecimal;
+                case AKEYCODE_NUMPAD_DIVIDE: return ImGuiKey_KeypadDivide;
+                case AKEYCODE_NUMPAD_MULTIPLY: return ImGuiKey_KeypadMultiply;
+                case AKEYCODE_NUMPAD_SUBTRACT: return ImGuiKey_KeypadSubtract;
+                case AKEYCODE_NUMPAD_ADD: return ImGuiKey_KeypadAdd;
+                case AKEYCODE_NUMPAD_EQUALS: return ImGuiKey_KeypadEqual;
+                // modifiers: ImGui tracks them so Ctrl/Cmd shortcuts work
+                case AKEYCODE_SHIFT_LEFT: return ImGuiKey_LeftShift;
+                case AKEYCODE_SHIFT_RIGHT: return ImGuiKey_RightShift;
+                case AKEYCODE_CTRL_LEFT: return ImGuiKey_LeftCtrl;
+                case AKEYCODE_CTRL_RIGHT: return ImGuiKey_RightCtrl;
+                case AKEYCODE_ALT_LEFT: return ImGuiKey_LeftAlt;
+                case AKEYCODE_ALT_RIGHT: return ImGuiKey_RightAlt;
+                case AKEYCODE_META_LEFT: return ImGuiKey_LeftSuper;
+                case AKEYCODE_META_RIGHT: return ImGuiKey_RightSuper;
+                case AKEYCODE_INSERT: return ImGuiKey_Insert;
                 default: return ImGuiKey_None;
             }
         }
 
-        // ImGui wants a character for Enter, Tab and Backspace: a hardware keyboard reports them
-        // as keys only, and a text field would never see the newline or the deletion.
-        void addImGuiCharacterFor(int32_t keycode){
+        // The character a hardware key stands for. A physical keyboard reports letters, digits and
+        // punctuation as KEYS, and ImGui's text fields take their characters from
+        // AddInputCharacter: without this, typing "abc" on a Bluetooth keyboard into a name field
+        // did nothing at all, and Shift and Caps Lock were not consulted either.
+        //
+        // With no deltas of its own, Android's key event carries no unicodeChar, so the character
+        // is derived here: Shift maps a Latin letter to upper case and a digit/punctuation key to
+        // its unshifted US-layout symbol. Caps Lock applies to letters only, as on a desktop.
+        void addImGuiCharacterFor(const GameActivityKeyEvent* event){
             ImGuiIO& io = ImGui::GetIO();
+            const int32_t keycode = event->keyCode;
+            const bool shift = (event->metaState & AMETA_SHIFT_ON) != 0 ||
+                               (event->metaState & AMETA_SHIFT_LEFT_ON) != 0;
+            const bool caps = (event->metaState & AMETA_CAPS_LOCK_ON) != 0;
+
             switch (keycode){
-                case AKEYCODE_DEL: io.AddInputCharacter('\b'); break;
-                case AKEYCODE_ENTER: io.AddInputCharacter('\r'); break;
-                case AKEYCODE_TAB: io.AddInputCharacter('\t'); break;
-                case AKEYCODE_SPACE: io.AddInputCharacter(' '); break;
+                case AKEYCODE_DEL: io.AddInputCharacter('\b'); return;
+                case AKEYCODE_ENTER: io.AddInputCharacter('\r'); return;
+                case AKEYCODE_TAB: io.AddInputCharacter('\t'); return;
+                case AKEYCODE_SPACE: io.AddInputCharacter(' '); return;
                 default: break;
             }
+
+            if (keycode >= AKEYCODE_A && keycode <= AKEYCODE_Z){
+                const char letter = static_cast<char>('a' + (keycode - AKEYCODE_A));
+                const bool upper = shift != caps;   // XOR, as a desktop's Shift+Caps
+                io.AddInputCharacter(static_cast<unsigned int>(upper ? std::toupper(letter) : letter));
+                return;
+            }
+            if (keycode >= AKEYCODE_0 && keycode <= AKEYCODE_9){
+                static const char* const shifted = ")!@#$%^&*(";
+                const int digit = keycode - AKEYCODE_0;
+                io.AddInputCharacter(static_cast<unsigned int>(shift ? shifted[digit] : ('0' + digit)));
+                return;
+            }
+
+            // punctuation: the unshifted and shifted US-layout characters of each key
+            struct Pair { int32_t key; char plain; char withShift; };
+            static const Pair punctuation[] = {
+                {AKEYCODE_COMMA, ',', '<'}, {AKEYCODE_PERIOD, '.', '>'},
+                {AKEYCODE_MINUS, '-', '_'}, {AKEYCODE_EQUALS, '=', '+'},
+                {AKEYCODE_LEFT_BRACKET, '[', '{'}, {AKEYCODE_RIGHT_BRACKET, ']', '}'},
+                {AKEYCODE_BACKSLASH, '\\', '|'}, {AKEYCODE_SEMICOLON, ';', ':'},
+                {AKEYCODE_APOSTROPHE, '\'', '"'}, {AKEYCODE_SLASH, '/', '?'},
+                {AKEYCODE_GRAVE, '`', '~'}, {AKEYCODE_STAR, '*', '*'},
+                {AKEYCODE_POUND, '#', '#'},
+                {AKEYCODE_NUMPAD_0, '0', '0'}, {AKEYCODE_NUMPAD_1, '1', '1'},
+                {AKEYCODE_NUMPAD_2, '2', '2'}, {AKEYCODE_NUMPAD_3, '3', '3'},
+                {AKEYCODE_NUMPAD_4, '4', '4'}, {AKEYCODE_NUMPAD_5, '5', '5'},
+                {AKEYCODE_NUMPAD_6, '6', '6'}, {AKEYCODE_NUMPAD_7, '7', '7'},
+                {AKEYCODE_NUMPAD_8, '8', '8'}, {AKEYCODE_NUMPAD_9, '9', '9'},
+                {AKEYCODE_NUMPAD_DOT, '.', '.'}, {AKEYCODE_NUMPAD_COMMA, ',', ','},
+                {AKEYCODE_NUMPAD_DIVIDE, '/', '/'}, {AKEYCODE_NUMPAD_MULTIPLY, '*', '*'},
+                {AKEYCODE_NUMPAD_SUBTRACT, '-', '-'}, {AKEYCODE_NUMPAD_ADD, '+', '+'},
+                {AKEYCODE_NUMPAD_EQUALS, '=', '='},
+            };
+            for (const Pair& p : punctuation){
+                if (p.key != keycode)
+                    continue;
+                io.AddInputCharacter(static_cast<unsigned int>(shift ? p.withShift : p.plain));
+                return;
+            }
+        }
+
+        // -- the clipboard ---------------------------------------------------------------------
+        //
+        // ImGui's text fields (every name field, the editor search, the console) read and write the
+        // clipboard through two platform callbacks. Linux answers them from the X11 selection and
+        // Windows from the Win32 clipboard; Android has neither reachable from C++, so the call goes
+        // to EditorActivity's Java methods (EditorClipboard), the same route the engine's own
+        // runtime takes for its HTML UI clipboard.
+        //
+        // The activity is reached through the JNIEnv of the frame thread. GameActivity attaches its
+        // android_main thread to the VM before calling it, so GetEnv succeeds there; the fallback
+        // AttachCurrentThread covers a frame loop that was moved to another thread.
+        JNIEnv* editorJniEnv(JavaVM** outVm){
+            JavaVM* vm = nullptr;
+            if (!gAndroidApp || !gAndroidApp->activity)
+                return nullptr;
+            if (gAndroidApp->activity->vm == nullptr)
+                return nullptr;
+            vm = gAndroidApp->activity->vm;
+            JNIEnv* env = nullptr;
+            if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env){
+                JavaVMAttachArgs args{JNI_VERSION_1_6, const_cast<char*>("jasperengine-editor-frame"), nullptr};
+                if (vm->AttachCurrentThread(&env, &args) != JNI_OK)
+                    return nullptr;
+            }
+            if (outVm) *outVm = vm;
+            return env;
+        }
+
+        void setClipboardText(ImGuiContext*, const char* text){
+            JavaVM* vm = nullptr;
+            JNIEnv* env = editorJniEnv(&vm);
+            if (!env || !gAndroidApp->activity->clazz)
+                return;
+            jstring value = env->NewStringUTF(text ? text : "");
+            if (!value)
+                return;
+            env->CallVoidMethod(gAndroidApp->activity->clazz,
+                                clipboardMethod(env, "setEditorClipboardText", "(Ljava/lang/String;)V"),
+                                value);
+            env->DeleteLocalRef(value);
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+        }
+
+        const char* getClipboardText(ImGuiContext*) {
+            static std::string cached;
+            cached.clear();
+            JavaVM* vm = nullptr;
+            JNIEnv* env = editorJniEnv(&vm);
+            if (!env || !gAndroidApp->activity->clazz)
+                return cached.c_str();
+            jstring value = static_cast<jstring>(
+                env->CallObjectMethod(gAndroidApp->activity->clazz,
+                                      clipboardMethod(env, "getEditorClipboardText", "()Ljava/lang/String;")));
+            if (!value || env->ExceptionCheck()){
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                return cached.c_str();
+            }
+            const char* utf8 = env->GetStringUTFChars(value, nullptr);
+            if (utf8){
+                cached = utf8;
+                env->ReleaseStringUTFChars(value, utf8);
+            }
+            env->DeleteLocalRef(value);
+            return cached.c_str();
+        }
+
+        // GameActivity's glue filters input before any app code sees it, and its two defaults are
+        // not what an editor wants. The key default drops only volume/camera; this one states the
+        // rule instead of inheriting it: every key an ImGui window can use, plus BACK when it comes
+        // from the soft keyboard (some IMEs send their backspace that way, as the engine's own
+        // key_filter notes), and nothing else -- a device key keeps working.
+        bool editorKeyFilter(const GameActivityKeyEvent* event){
+            if (event->keyCode == AKEYCODE_BACK)
+                return (event->flags & AKEY_EVENT_FLAG_SOFT_KEYBOARD) != 0;
+            return imGuiKeyFromAndroid(event->keyCode) != ImGuiKey_None;
+        }
+
+        // The default motion filter admits source == SOURCE_TOUCHSCREEN only, so a tablet's
+        // trackpad or a plugged-in mouse would reach the editor as nothing at all. Everything the
+        // editor can use gets through: the touchscreen, a mouse and a touchpad; a gamepad's
+        // joystick motion is not ImGui's to consume and stays out (Android's own key routing still
+        // handles its buttons).
+        bool editorMotionFilter(const GameActivityMotionEvent* event){
+            const int32_t source = event->source & AINPUT_SOURCE_CLASS_MASK;
+            return source == AINPUT_SOURCE_CLASS_POINTER ||   // touchscreen, trackpad
+                   source == AINPUT_SOURCE_CLASS_TRACKBALL;
         }
 
         void processKeyEvents(android_input_buffer* buffer){
@@ -345,8 +600,10 @@ namespace jasperengine::editor {
                 if (event->repeatCount > 0)
                     continue;
                 io.AddKeyEvent(key, down);
+                // a held key repeats the character while the IME does not; ImGui asks for the key
+                // event only once, so the repeat is the character
                 if (down)
-                    addImGuiCharacterFor(event->keyCode);
+                    addImGuiCharacterFor(event);
             }
         }
 
@@ -493,6 +750,11 @@ namespace jasperengine::editor {
         gAndroidApp = app;
         app->userData = nullptr;
         app->onAppCmd = &onAppCmd;
+        // GameActivity's own defaults are replaced by the editor's (editorKeyFilter and
+        // editorMotionFilter above): the default motion filter admits SOURCE_TOUCHSCREEN and
+        // nothing else, so a tablet's trackpad or a USB mouse reached the editor as no events.
+        android_app_set_key_event_filter(app, &editorKeyFilter);
+        android_app_set_motion_event_filter(app, &editorMotionFilter);
 
         // The window exists by the time android_main runs, but the first APP_CMD_INIT_WINDOW
         // may still be ahead of us: wait for it rather than drawing into no surface.

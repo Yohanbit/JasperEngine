@@ -81,6 +81,20 @@ public class EditorActivity extends GameActivity {
         super.onCreate(savedInstanceState);
     }
 
+    // -- the editor's clipboard (editor/backend/BackendAndroid.cpp -> ImGui's platform callbacks).
+    // Java methods on the activity the native glue already holds, so no extra registration runs and
+    // a call from the frame thread reaches the UI thread through runOnUiThread.
+
+    /** ImGui's Platform_SetClipboardTextFn. A no-op before onCreate's Context is ready. */
+    public void setEditorClipboardText(String text) {
+        EditorClipboard.set(this, text);
+    }
+
+    /** ImGui's Platform_GetClipboardTextFn: "" when there is nothing (or no permission) to read. */
+    public String getEditorClipboardText() {
+        return EditorClipboard.get(this);
+    }
+
     @Override
     protected void onStop() {
         super.onStop();
