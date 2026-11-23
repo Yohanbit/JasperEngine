@@ -32,7 +32,9 @@
     #include <unistd.h>
     #include <sys/wait.h>
     #include <fcntl.h>
-    #include <spawn.h>
+    #if !defined(__ANDROID__)
+    #include <spawn.h>   // no posix_spawn in Bionic, and an Android app may not exec anyway
+    #endif
 
     extern char **environ;
 #endif
@@ -609,7 +611,11 @@ bool editor::CommandRunner::makeCloexecPipe(int fds[2]) {
 
 bool editor::CommandRunner::launchDetached(const fs::path& exe, const fs::path& workingDir, std::string& error) {
     error.clear();
-#ifdef _WIN32
+#if defined(__ANDROID__)
+    (void)workingDir;
+    error = "Android apps cannot launch other programs (" + exe.string() + ")";
+    return false;
+#elif defined(_WIN32)
     const std::wstring wexe = exe.wstring();
     const std::wstring wdir = workingDir.wstring();
     STARTUPINFOW si{};
@@ -930,6 +936,17 @@ bool editor::CommandRunner::run(const std::vector<std::string>& argv, const fs::
         if (hJob) CloseHandle(hJob);
 
         return exitCode == 0;
+    #elif defined(__ANDROID__)
+        // An Android app may not execute a program it did not ship, and Bionic has no
+        // posix_spawn to do it with. Everything that reaches here (a compiler, Aseprite, a
+        // version control client) is a desktop tool, so the honest answer is this message, the
+        // same one Platform::launchDetached and McpClient's StdioClient give.
+        (void)argv;
+        (void)workingDir;
+        (void)onLine;
+        (void)environment;
+        Out::error("Android apps cannot run other programs (%s)", argv.empty() ? "" : argv[0].c_str());
+        return false;
     #else
         int pipefd[2];
         if (!makeCloexecPipe(pipefd)) {

@@ -45,7 +45,13 @@
     #include <mach-o/loader.h>
     #include <csignal>
 #else
+    #if defined(__ANDROID__)
+    // Bionic has no <link.h>: dl_iterate_phdr and struct dl_phdr_info are in <dlfcn.h>. <elf.h>
+    // and the ElfW() macros exist there, which is what the NT_GNU_BUILD_ID read below needs.
+    #include <dlfcn.h>
+    #else
     #include <link.h>
+    #endif
     #include <elf.h>
     #include <csignal>
 #endif

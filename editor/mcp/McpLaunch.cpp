@@ -194,7 +194,14 @@ bool startXvfb(std::string& error) {
         finishMcpCommand();
         return false;
     }
+#if defined(__ANDROID__)
+    // Bionic has no setenv(); this whole path is Xvfb-on-Linux anyway and startXvfb is under
+    // #ifdef __linux__, so on Android this is unreachable by construction -- the constant only
+    // keeps the file honest about what it does not do there.
+    (void)display;
+#else
     setenv("DISPLAY", (":" + display).c_str(), 1);
+#endif
     std::fprintf(stderr, "[mcp] headless: Xvfb on DISPLAY=:%s\n", display.c_str());
     return true;
 }
@@ -292,7 +299,9 @@ int prepareMcpCommand(int argc, char** argv, const char* executableName) {
                 return 1;
             }
         }
+#if !defined(__ANDROID__)
         setenv("LIBGL_ALWAYS_SOFTWARE", "1", 0);
+#endif
     }
 #else
     if (options.headless) {

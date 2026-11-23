@@ -31,7 +31,9 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
-#include <spawn.h>
+#if !defined(__ANDROID__)
+#include <spawn.h>   // Bionic has no posix_spawn, and an Android app may not exec (see runProcess)
+#endif
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -244,6 +246,15 @@ ProcessResult runProcess(const ProcessSpec& spec) {
         return result;
     }
     countSpawn();
+#if defined(__ANDROID__)
+    // A version control client is a desktop tool: Android apps cannot execute anything they did
+    // not ship, and Bionic has no posix_spawn in any case. The result says so in the same shape a
+    // failed spawn would, so every caller's error path already handles it.
+    (void)spec;
+    result.spawnFailed = true;
+    result.spawnError = "Android apps cannot run other programs (version control needs a desktop)";
+    return result;
+#endif
     SigpipeGuard sigpipe;
 
     // everything the child gets is built before the spawn

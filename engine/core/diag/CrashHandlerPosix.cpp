@@ -43,7 +43,13 @@
 #include <mach/arm/thread_status.h>
 #endif
 #else
+#if defined(__ANDROID__)
+// Bionic has no <link.h>: dl_iterate_phdr is declared in <dlfcn.h> there, and the module list
+// below is read the same way. prctl() lives in <sys/prctl.h>, which Android does have.
+#include <dlfcn.h>
+#else
 #include <link.h>
+#endif
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #endif
@@ -289,6 +295,11 @@ __attribute__((noinline)) void fatal(int sig, siginfo_t* info, void* context) {
     n = appendText(text, sizeof(text), 0, "thread_name: ");
     appendText(text, sizeof(text), n, preparedThreadName);
     line(report, text);
+#elif defined(__ANDROID__)
+    // Android threads name themselves through pthread_setname_np and there is no prctl(PR_GET_NAME)
+    // to read one back in a signal handler; the logcat tombstone carries it instead.
+    n = appendText(text, sizeof(text), 0, "thread_name: (see the tombstone)");
+    line(report, text);
 #else
     char threadName[16]{};
     prctl(PR_GET_NAME, threadName, 0, 0, 0);
@@ -457,8 +468,15 @@ bool installPlatform(const Config&) {
     appendText(state().coreHint, sizeof(state().coreHint), 0, "core: see the OS .ips report");
 #else
     char executable[512]{};
+#if defined(__ANDROID__)
+    // Android has no /proc/self/exe (the app's binary is zygote, which is not this code). The
+    // main module is the one dl_iterate_phdr reports with an empty dlpi_name, so that is what the
+    // fallback below calls it -- a name for a reader, not a path used for anything.
+    std::strncpy(executable, "libjasperengine-editor.so", sizeof(executable) - 1);
+#else
     const ssize_t bytes = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     if (bytes > 0) executable[bytes] = 0;
+#endif
     dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
         const char* name = info->dlpi_name && *info->dlpi_name ? info->dlpi_name : static_cast<const char*>(data);
         for (size_t i = 0; i < info->dlpi_phnum; i++) {

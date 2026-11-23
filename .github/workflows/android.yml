@@ -171,32 +171,45 @@ jobs:
       # a build is fixed by, so ten of them per failing step is what this needs.
       - name: Annotate the build errors
         if: failure()
+        continue-on-error: true
         run: |
-          # Each logged.sh step overwrites build/test-results/<its own name>.log, so the APK step's
-          # real output is in the build directory it wrote into, not in the log that survived.
-          logs=(
-            build/android/gradle.log
-            build/test-results/android-build.log
-            build/test-results/android-editor.log
-          )
-          found=0
-          for log in "${logs[@]}"; do
-            [[ -f $log ]] || continue
-            found=1
-            echo "::group::$log"
-            # the build system's own errors first: that is what a build is fixed by
-            grep -nE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:" "$log" \
-              | head -n 10 | while IFS= read -r line; do
+          # This step is the ONLY way a failure is visible from outside the runner (logs and
+          # artifacts are unreachable), so it must never fail itself and must never be silent.
+          # Two rules follow: no `set -e`, and every message goes out as ::error::, which becomes a
+          # check-run annotation the API returns.
+          set +e
+          echo "::error::the Android build failed; the messages below are its own output"
+
+          reported=0
+          for log in build/android/gradle.log \
+                     build/test-results/android-build.log \
+                     build/test-results/android-editor.log \
+                     build/test-results/*.log; do
+            [[ -f "$log" ]] || continue
+            errors=$(grep -aE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|No such file" "$log" 2>/dev/null | head -n 8)
+            if [[ -n "$errors" ]]; then
+              while IFS= read -r line; do
                 printf '::error::%s\n' "${line//'%'/%25}"
-              done
-            echo "::endgroup::"
-            echo "--- last 60 lines of $log ---"
-            tail -n 60 "$log"
+                reported=$((reported + 1))
+              done <<< "$errors"
+            fi
           done
-          if [[ $found -eq 0 ]]; then
-            echo "::error::the Android build failed and wrote no log to annotate"
-            ls -la build/android build/test-results 2>/dev/null || true
+
+          # Nothing matched the patterns (a linker error, a Gradle exception, a missing file):
+          # send the tail itself, one annotation per line, rather than a summary nobody can act on.
+          if [[ $reported -eq 0 ]]; then
+            for log in build/android/gradle.log build/test-results/android-build.log \
+                       build/test-results/android-editor.log; do
+              [[ -f "$log" ]] || continue
+              while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                printf '::error::[%s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+              done < <(tail -n 40 "$log")
+            done
           fi
+
+          # and the facts that explain an empty result
+          echo "::error::logs present: $(ls build/android/*.log build/test-results/*.log 2>/dev/null | tr '\n' ' ')"
           exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

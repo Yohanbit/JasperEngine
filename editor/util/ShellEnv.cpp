@@ -18,9 +18,15 @@
     #include <errno.h>
     #include <fcntl.h>
     #include <poll.h>
+    #if !defined(__ANDROID__)
+    // a login shell, getpwuid() and posix_spawn() are desktop-only: Bionic has no <pwd.h> and no
+    // posix_spawn below API 28, and an app may not execute a shell in any case
     #include <pwd.h>
+    #endif
     #include <signal.h>
+    #if !defined(__ANDROID__)
     #include <spawn.h>
+    #endif
     #include <sys/wait.h>
     #include <time.h>
     #include <unistd.h>
@@ -147,7 +153,7 @@ namespace {
         return dirs;
     }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__ANDROID__)
     bool launchedFromTerminal() {
         return isatty(STDIN_FILENO) || isatty(STDOUT_FILENO) || isatty(STDERR_FILENO);
     }
@@ -344,7 +350,12 @@ namespace {
 }
 
 void editor::ShellEnv::bootstrapPath() {
-#ifndef _WIN32
+#if defined(__ANDROID__)
+    // no login shell to ask and no setenv() in Bionic: Android resolves PATH from the zygote and
+    // every tool this could add is unreachable anyway (an app may not exec), so there is nothing
+    // to merge and the inherited value is already right
+    return;
+#elif !defined(_WIN32)
     static bool bootstrapped = false;
     if (bootstrapped) return;
     bootstrapped = true;
@@ -420,7 +431,13 @@ std::filesystem::path editor::ShellEnv::homeDirectory() {
     return home;
 #else
     if (const char* home = std::getenv("HOME"); home && *home) return fs::path(home);
+#if !defined(__ANDROID__)
+    // getpwuid is <pwd.h>, which Bionic does not have. Android also has no HOME: the editor's
+    // directories come from EditorPaths.java (JASPERENGINE_ANDROID_CONFIG_DIR /
+    // _PROJECTS_DIR), so an empty path here is the honest answer and the callers already treat
+    // it as "ask the environment instead" (AppSettings.cpp:65).
     if (const struct passwd* pw = getpwuid(getuid()); pw && pw->pw_dir && *pw->pw_dir) return fs::path(pw->pw_dir);
+#endif
     return fs::path();
 #endif
 }
