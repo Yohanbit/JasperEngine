@@ -2418,11 +2418,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     # glGetIntegerv, glCreateProgram, eglGetProcAddress and the rest of what the engine's sokol
     # backend calls live in libGLESv3.so and libEGL.so. PLATFORM_LIBS carries them, but PLATFORM_LIBS
     # is linked to the standalone game executable only (bottom of this file), never to this
-    # library. A SHARED jasperengine may leave undefined symbols -- CMake passes
-    # -Wl,--allow-shlib-undefined for a library -- so nothing complained here; the complaint came
-    # from the one consumer that may not: the editor's libjasperengine-editor.so, whose link is
-    # the final one. Linking them here is what makes the library own its GL dependency.
-    target_link_libraries(jasperengine PUBLIC ${OPENGL_LIB} EGL)
+    # library, and the editor builds the library from the top-level tree: nothing ever named them
+    # here, so every one of those symbols was undefined in the editor's .so.
+    #
+    # The names are literal on purpose. OPENGL_LIB is set inside the standalone block above, which
+    # is closed by the time this library is declared, so it is empty in an editor build -- an
+    # earlier attempt passed ${OPENGL_LIB} and linked nothing at all.
+    target_link_libraries(jasperengine PUBLIC GLESv3 EGL)
 endif()
 
 if(JASPERENGINE_TITLE_ART_LIBS)
