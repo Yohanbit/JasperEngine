@@ -835,7 +835,12 @@ android)
         if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
             /src/tools/ci/retry.sh bash -c \"sdkmanager --install 'ndk;\$ndk' > /dev/null && test -f '\$ANDROID_HOME/ndk/\$ndk/source.properties'\"
         fi
-        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug 2>&1 | tee /src/$APK_DIR/gradle.log
+        # build/android/identity.args names this APK (tools/android/release_identity.py --gradle):
+        # one -P per line, read with mapfile so a value may contain a space ("Android RC1").
+        # Absent, the array is empty and the APK is unnamed exactly as before -- no new argument
+        # for this lane's other callers (the ci.yml android job) to learn.
+        mapfile -t IDENTITY_ARGS < /src/build/android/identity.args 2>/dev/null || IDENTITY_ARGS=()
+        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee /src/$APK_DIR/gradle.log
         cp app/build/outputs/apk/debug/*.apk /src/$APK_DIR/
         python3 /src/tools/ci/check_gradle_warnings.py /src/$APK_DIR/gradle.log
     "

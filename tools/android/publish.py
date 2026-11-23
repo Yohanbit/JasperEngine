@@ -193,7 +193,10 @@ def main(argv: list[str]) -> int:
 
     digest = sha256(apk)
     number = manifest["buildNumber"] + 1
-    version_code = number
+    # the same rule release_identity.py used to build the APK (its candidate versionCode is above
+    # every published code AND the build number): recording a different one would describe an APK
+    # that does not exist, and the next release's code would be computed from the wrong number
+    version_code = ident["versionCode"]
     entry = {
         "name": args.name,
         "number": number,

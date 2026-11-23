@@ -18,6 +18,28 @@ on:
           - arm64-v8a
           - arm64-v8a,x86_64
           - arm64-v8a,armeabi-v7a,x86,x86_64
+      # A release is this same lane plus a name. Left empty, the run only builds artifacts for
+      # review, which is what a normal dispatch is for. Filled in, the `release` job below builds
+      # both APKs from THIS ref's code, names them, hashes them and publishes a GitHub release.
+      #
+      # This lives here rather than in a workflow of its own for one reason: GitHub only offers
+      # workflow_dispatch for a workflow that exists on the default branch, and `android.yml` is
+      # there while a new file would need a merge to main that this session may not make.
+      release_name:
+        description: 'Release name (never reused, e.g. "Android RC1"). Empty = build only'
+        required: false
+        type: string
+      release_kind:
+        description: 'rc for a candidate; stable only when the acceptance table is green'
+        required: false
+        default: rc
+        type: choice
+        options: [rc, stable]
+      release_tests:
+        description: 'Test record that goes into the release notes'
+        required: false
+        default: ANDROID_RELEASE_STATUS.md
+        type: string
   push:
     branches: [main]
     paths:
@@ -34,9 +56,12 @@ permissions:
   actions: write  # the prune step deletes this lane's older ccache entries (the repository's 10 GB)
 
 # one run per ref: a new dispatch supersedes the one still building
+# one run per ref: a new dispatch supersedes the one still building. A RELEASE is never cancelled
+# halfway (a half-published release leaves a tag pointing at an APK nobody checked), so a release
+# dispatch gets its own group and waits its turn.
 concurrency:
-  group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
+  group: android-apk-${{ github.ref }}${{ inputs.release_name && '-release' || '' }}
+  cancel-in-progress: ${{ !inputs.release_name }}
 
 defaults:
   run:
@@ -89,6 +114,31 @@ jobs:
           key: gradle-${{ steps.image.outputs.tag }}-${{ hashFiles('engine/workspaces/androidstudio/**/*.gradle', 'engine/workspaces/androidstudio/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ steps.image.outputs.tag }}-
 
+      # The APK's own identity: versionName, versionCode and the build stamp that the release reads
+      # back out of the packaged APK. Computed once, here, so the game APK and the editor APK of one
+      # run cannot disagree about what they are.
+      - name: Identity of this checkout
+        id: identity
+        run: |
+          set -euo pipefail
+          python3 tools/android/release_identity.py --json | tee identity.json
+          python3 tools/android/release_identity.py --gradle | tee gradle-identity.txt
+          # A release name has a space in it ("Android RC1"), so the flags go to a step output one
+          # word per line and the step that uses them splits on newlines, not on spaces.
+          # one -P per line, in a file both APK steps read: a release name has a space in it
+          # ("Android RC1"), and mapfile keeps a line whole where word splitting would not
+          mkdir -p build/android
+          cp gradle-identity.txt build/android/identity.args
+          # A release must be cut from a commit, not from a dirty tree. (It is necessarily
+          # unpublished -- naming it is what this run does -- so --strict's published check is
+          # not the right gate here; publish.py refuses a reused name or commit later.)
+          if [[ -n "${{ inputs.release_name }}" ]]; then
+            if [[ "$(python3 -c 'import json,sys;print(json.load(open("identity.json"))["dirty"])')" == "True" ]]; then
+              echo "::error::the checkout is dirty; a release must name a commit"
+              exit 1
+            fi
+          fi
+
       - name: APK
         run: tools/ci/logged.sh android-build "tools/build.sh android"
 
@@ -106,7 +156,9 @@ jobs:
             if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
               /src/tools/ci/retry.sh bash -c \"sdkmanager --install ndk;\$ndk > /dev/null && test -f \\\"\$ANDROID_HOME/ndk/\$ndk/source.properties\\\"\"
             fi
-            JASPERENGINE_ANDROID_ABIS=\$ANDROID_ABIS CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug
+            mapfile -t IDENTITY_ARGS < /src/build/android/identity.args 2>/dev/null || IDENTITY_ARGS=()
+            JASPERENGINE_ANDROID_ABIS=\$ANDROID_ABIS CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+                ./gradlew --no-daemon :editor:assembleDebug \"\${IDENTITY_ARGS[@]}\"
           "'
           status=$?
           apk=engine/workspaces/androidstudio/editor/build/outputs/apk/debug/editor-debug.apk
@@ -196,3 +248,123 @@ jobs:
           gh cache list --repo "$GITHUB_REPOSITORY" --key "ccache-android-" --limit 100 \
               --json id,key --jq ".[] | select(.key != \"$JASPER_CCACHE_KEY\") | .id" |
               while read -r id; do gh cache delete --repo "$GITHUB_REPOSITORY" "$id"; done
+
+  # ----------------------------------------------------------------------------------------------
+  # The release: the same two APKs, named and published. It runs only when a name was given, so a
+  # plain dispatch still produces artifacts and nothing else -- an APK from this lane is never
+  # official by accident.
+  #
+  #   gh workflow run android.yml --ref arena/b99b8fb3-jasperengine \
+  #       -f abis=arm64-v8a -f release_name="Android RC1" -f release_kind=rc
+  #
+  # tools/android/publish.py is the only thing that writes the record: it reads the identity back
+  # out of the packaged APK and refuses when the APK names another commit, so a mislabelled APK
+  # cannot reach releases.json.
+  release:
+    name: ${{ inputs.release_name }}
+    if: ${{ inputs.release_name != '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # the release, its APKs, and the record committed back to this ref
+    steps:
+      - name: Refuse a name that is taken, before anything else
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.release_name }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/android/releases.json?ref=$GITHUB_SHA" \
+              --jq '.content' | base64 -d > /tmp/releases.json
+          if python3 -c "import json,sys;n=sys.argv[1].lower();sys.exit(0 if any(r['name'].lower()==n for r in json.load(open('/tmp/releases.json'))['releases']) else 1)" "$NAME"; then
+            echo "::error::release name '$NAME' is already used; names are never reused"
+            exit 1
+          fi
+          tag="android-$(echo "$NAME" | tr '[:upper:] ' '[:lower:]-')"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::a GitHub release already exists for '$NAME' ($tag)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # release_identity.py reads the full commit, and publish.py the tree state
+
+      - name: Download the APKs this run built
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v5
+        with:
+          name: jasperengine-apk-${{ inputs.abis }}
+          path: build/android
+
+      - name: Identify the checkout
+        id: identity
+        run: |
+          set -euo pipefail
+          python3 tools/android/release_identity.py --json | tee identity.json
+          # a release is cut from a commit; a dirty tree names no commit, so it is refused here
+          # rather than after the release exists
+          python3 tools/android/release_identity.py --strict >/dev/null
+
+      # The editor APK is the artifact a release publishes; the game APK is what the user launches
+      # to play. The artifact holds both, and publish.py reads the name out of the one it is given.
+      - name: Publish the record and the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.release_name }}
+          KIND: ${{ inputs.release_kind }}
+          TESTS: ${{ inputs.release_tests }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          git config user.name "JasperEngine release"
+          git config user.email "release@jasperengine.invalid"
+
+          editor_apk="$(ls build/android/*editor*.apk 2>/dev/null | head -n 1 || true)"
+          game_apks=()
+          for apk in build/android/*.apk; do
+            [[ "$apk" == "$editor_apk" ]] && continue
+            game_apks+=("$apk")
+          done
+          if [[ -z "$editor_apk" ]]; then
+            echo "::error::the editor APK is not in this run's artifact; nothing to publish"
+            ls -la build/android
+            exit 1
+          fi
+
+          python3 tools/android/publish.py --apk "$editor_apk" --name "$NAME" --kind "$KIND" \
+              --tests "$TESTS" --run "$RUN_ID" | tee publish.txt
+
+          sha_editor="$(sha256sum "$editor_apk" | cut -d' ' -f1)"
+          notes="$(ls docs/android/*-notes.md | xargs ls -t | head -n 1)"
+          commit="$(python3 -c 'import json;print(json.load(open("identity.json"))["commit"])')"
+          slug="$(python3 -c "import sys,re;print(re.sub(r'[^a-z0-9]+','-',sys.argv[1].lower()).strip('-'))" "$NAME")"
+          tag="android-$slug"
+
+          assets=("$editor_apk" "${game_apks[@]}")
+          gh release create "$tag" "${assets[@]}" \
+              --title "$NAME" --notes-file "$notes" --target "$commit"
+
+          # the record goes back to the ref the release was cut from, so a later build of this
+          # commit keeps its name and ANDROID_RELEASE_STATUS.md can be made true from the file
+          git add tools/android/releases.json "$notes"
+          git commit -m "Release $NAME
+
+          editor APK $(basename "$editor_apk") sha256 $sha_editor
+          CI run https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID
+
+          Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>"
+          git push origin "HEAD:$GITHUB_REF_NAME"
+
+          {
+            echo "### $NAME"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Editor APK | \`$(basename "$editor_apk")\` \`$sha_editor\` |"
+            for apk in "${game_apks[@]}"; do
+              echo "| Game APK | \`$(basename "$apk")\` \`$(sha256sum "$apk" | cut -d' ' -f1)\` |"
+            done
+            echo "| Release | https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -129,5 +129,68 @@ class Identity(unittest.TestCase):
             self.assertIn(key, line)
 
 
+class PublishRecordTest(unittest.TestCase):
+    """The record must describe the APK that was actually built.
+
+    publish.py and release_identity.py both decide a versionCode, and if they disagree the
+    manifest in releases.json claims a code the APK does not have -- which is exactly the kind of
+    quiet mismatch that makes a phone refuse an install.
+    """
+
+    def test_publish_records_the_identity_version_code(self):
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from pathlib import Path
+
+        import publish
+        import release_identity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            apk = tmp / "editor.apk"
+            apk.write_bytes(b"not really an apk")
+
+            # the smallest manifest that makes publish.py reach its entry-building code
+            manifest_path = tmp / "releases.json"
+            manifest_path.write_text(json.dumps({
+                "buildNumber": 8,
+                "releases": [{"name": "V8", "number": 8, "versionCode": 1, "commit": None},
+                             {"name": "Older", "number": 9, "versionCode": 9, "commit": "a" * 40}],
+            }))
+            original_manifest = publish.MANIFEST
+            original_root = publish.ROOT
+            had_load = release_identity.MANIFEST
+            publish.MANIFEST = manifest_path
+            publish.ROOT = tmp
+            release_identity.MANIFEST = manifest_path
+            try:
+                publish.apk_metadata = lambda path: {
+                    "package": "com.example", "versionName": "x", "buildLine": "", "abis": []}
+                # patch the one git call both modules make, so identity() and publish agree on a
+                # clean tree at a fixed commit (is_dirty() itself is a thin wrapper on this)
+                original_git = release_identity.git
+                release_identity.git = lambda *args, **kwargs: (
+                    "b" * 40 if args[:2] == ("rev-parse", "HEAD")
+                    else "" if args[0] == "status"   # status returns "" for a clean tree
+                    else original_git(*args, **kwargs))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = publish.main(["--apk", str(apk), "--name", "Test RC 1", "--tests",
+                                         str(tmp / "tests.md")])
+                self.assertEqual(code, 0)
+                recorded = json.loads(manifest_path.read_text())["releases"][-1]
+                ident = release_identity.identity(json.loads(manifest_path.read_text()))
+                # the rule: above every published code and the build number, and the same in both
+                self.assertGreater(recorded["versionCode"], 9)
+                self.assertGreater(recorded["versionCode"], recorded["number"])
+                self.assertEqual(recorded["versionCode"], ident["versionCode"])
+            finally:
+                release_identity.git = original_git
+                publish.MANIFEST = original_manifest
+                publish.ROOT = original_root
+                release_identity.MANIFEST = had_load
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
