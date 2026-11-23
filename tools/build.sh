@@ -851,9 +851,16 @@ android)
         # this target is build/android, and the identity must survive that. Absent, the array is
         # empty and the APK is unnamed exactly as before.
         mapfile -t IDENTITY_ARGS < /src/build/.cache/identity.args 2>/dev/null || IDENTITY_ARGS=()
-        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee /src/$APK_DIR/gradle.log
-        cp app/build/outputs/apk/debug/*.apk /src/$APK_DIR/
-        python3 /src/tools/ci/check_gradle_warnings.py /src/$APK_DIR/gradle.log
+        # Made here, in the container, immediately before it is written to: the host's mkdir runs
+        # before the container starts, and the block failing with "no such file or directory" from
+        # tee is a failure nobody can read.
+        mkdir -p "/src/$APK_DIR"
+        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
+        # the globs are not compgen here (this is a real shell with real files): a failed one must
+        # say so, and not be handed to cp as a literal name
+        ls /src/$APK_DIR/gradle.log
+        cp app/build/outputs/apk/debug/*.apk "/src/$APK_DIR/"
+        python3 /src/tools/ci/check_gradle_warnings.py "/src/$APK_DIR/gradle.log"
     " || build_status=$?
     if [[ $build_status -ne 0 ]]; then
         echo "android: the build failed (status $build_status); the compiler's and Gradle's own lines are in $APK_DIR/gradle.log" >&2
