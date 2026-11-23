@@ -123,12 +123,12 @@ jobs:
           set -euo pipefail
           python3 tools/android/release_identity.py --json | tee identity.json
           python3 tools/android/release_identity.py --gradle | tee gradle-identity.txt
-          # A release name has a space in it ("Android RC1"), so the flags go to a step output one
-          # word per line and the step that uses them splits on newlines, not on spaces.
           # one -P per line, in a file both APK steps read: a release name has a space in it
-          # ("Android RC1"), and mapfile keeps a line whole where word splitting would not
-          mkdir -p build/android
-          cp gradle-identity.txt build/android/identity.args
+          # ("Android RC1"), and mapfile keeps a line whole where word splitting would not.
+          # Under build/.cache, which --clean does not remove; build/android is $OUT for this
+          # target and tools/build.sh deletes it before building.
+          mkdir -p build/.cache
+          cp gradle-identity.txt build/.cache/identity.args
           # A release must be cut from a commit, not from a dirty tree. (It is necessarily
           # unpublished -- naming it is what this run does -- so --strict's published check is
           # not the right gate here; publish.py refuses a reused name or commit later.)
@@ -156,7 +156,7 @@ jobs:
             if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
               /src/tools/ci/retry.sh bash -c \"sdkmanager --install ndk;\$ndk > /dev/null && test -f \\\"\$ANDROID_HOME/ndk/\$ndk/source.properties\\\"\"
             fi
-            mapfile -t IDENTITY_ARGS < /src/build/android/identity.args 2>/dev/null || IDENTITY_ARGS=()
+            mapfile -t IDENTITY_ARGS < /src/build/.cache/identity.args 2>/dev/null || IDENTITY_ARGS=()
             JASPERENGINE_ANDROID_ABIS=\$ANDROID_ABIS CMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 ./gradlew --no-daemon :editor:assembleDebug \"\${IDENTITY_ARGS[@]}\"
           "'
@@ -173,43 +173,37 @@ jobs:
         if: failure()
         continue-on-error: true
         run: |
-          # This step is the ONLY way a failure is visible from outside the runner (logs and
-          # artifacts are unreachable), so it must never fail itself and must never be silent.
-          # Two rules follow: no `set -e`, and every message goes out as ::error::, which becomes a
-          # check-run annotation the API returns.
+          # This step is the only readable output from outside the runner, so it must never fail
+          # and never be empty: it puts the failing command's own lines into check-run annotations.
           set +e
-          echo "::error::the Android build failed; the messages below are its own output"
+          shopt -s nullglob
 
-          reported=0
-          for log in build/android/gradle.log \
-                     build/test-results/android-build.log \
-                     build/test-results/android-editor.log \
-                     build/test-results/*.log; do
-            [[ -f "$log" ]] || continue
-            errors=$(grep -aE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|No such file" "$log" 2>/dev/null | head -n 8)
-            if [[ -n "$errors" ]]; then
-              while IFS= read -r line; do
-                printf '::error::%s\n' "${line//'%'/%25}"
-                reported=$((reported + 1))
-              done <<< "$errors"
+          logs=(build/test-results/android-build.log build/test-results/android-editor.log
+                build/android/gradle.log)
+          for log in "${logs[@]}"; do
+            if [[ ! -s "$log" ]]; then
+              echo "::error::[$log] missing or empty"
+              continue
             fi
+            # the errors first: they are what a build is fixed by
+            while IFS= read -r line; do
+              [[ -z "$line" ]] && continue
+              printf '::error::[%s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+            done < <(grep -aE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|^\$ |usage:|invalid|cannot|No such" "$log" 2>/dev/null | head -n 12)
+
+            # the command line logged.sh recorded, so the annotation says what actually ran
+            head -n 1 "$log" 2>/dev/null | while IFS= read -r line; do
+              printf '::error::[%s first] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+            done
+
+            # and the tail, always: the last lines say why even when the pattern above misses it
+            while IFS= read -r line; do
+              [[ -z "$line" ]] && continue
+              printf '::error::[%s …] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+            done < <(tail -n 25 "$log")
           done
 
-          # Nothing matched the patterns (a linker error, a Gradle exception, a missing file):
-          # send the tail itself, one annotation per line, rather than a summary nobody can act on.
-          if [[ $reported -eq 0 ]]; then
-            for log in build/android/gradle.log build/test-results/android-build.log \
-                       build/test-results/android-editor.log; do
-              [[ -f "$log" ]] || continue
-              while IFS= read -r line; do
-                [[ -z "$line" ]] && continue
-                printf '::error::[%s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-              done < <(tail -n 40 "$log")
-            done
-          fi
-
-          # and the facts that explain an empty result
-          echo "::error::logs present: $(ls build/android/*.log build/test-results/*.log 2>/dev/null | tr '\n' ' ')"
+          echo "::error::exit codes: APK step failed; logs were: $(ls -la build/test-results 2>/dev/null | tr '\n' ' ')"
           exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
