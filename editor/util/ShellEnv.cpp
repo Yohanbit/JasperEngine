@@ -182,7 +182,7 @@ namespace {
         (void)timeoutMs;
         (void)stopMarker;
         return "";
-#endif
+#else
         int pipefd[2];
         if (pipe(pipefd) != 0) return "";
 
@@ -299,6 +299,7 @@ namespace {
 
         aborted = timedOut || flooded;
         return output;
+#endif
     }
 
     // Both markers must be there: a truncated capture is not a PATH.

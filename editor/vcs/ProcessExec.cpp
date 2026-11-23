@@ -252,8 +252,7 @@ ProcessResult runProcess(const ProcessSpec& spec) {
     result.spawnFailed = true;
     result.spawnError = "Android cannot start external processes: " + spec.exe.string();
     return result;
-#endif
-
+#else
     countSpawn();
     SigpipeGuard sigpipe;
 
@@ -454,6 +453,7 @@ ProcessResult runProcess(const ProcessSpec& spec) {
     else if (WIFSIGNALED(status)) result.exitCode = 128 + WTERMSIG(status);
     result.truncated = sink.truncated;
     return result;
+#endif // __ANDROID__
 }
 
 #else // _WIN32
