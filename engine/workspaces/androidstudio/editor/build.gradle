@@ -71,13 +71,17 @@ android {
 
     sourceSets {
         main {
-            // NOT platform/android/java wholesale: that directory holds the game runtime's
+            // NOT engine/platform/android/java wholesale: that directory holds the game runtime's
             // MainActivity and its lifecycle bridge, which this app neither needs nor can load
             // (they link the game's native library). Only the boot report is shared, and it
             // depends on nothing else in the package.
+            //
+            // The path is under engine/, exactly as app/build.gradle names it (there is no
+            // platform/ at the repository root): a wrong path here fails the compile with
+            // "cannot find symbol JasperBootLog" for every line that uses it.
             java.srcDirs = [
                 'src/main/java',
-                new File(jasperengineRootAbs + '/platform/android/java').absolutePath
+                new File(jasperengineRootAbs + '/engine/platform/android/java').absolutePath
             ]
             java.includes = [
                 'com/jaspergameengine/jasperengine/JasperBootLog.java',
