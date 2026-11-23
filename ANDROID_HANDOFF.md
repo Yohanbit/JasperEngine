@@ -58,6 +58,52 @@ FileUtils::writeText("data://" + name, std::string(bytes.begin(), bytes.end()), 
 `importedAssetName` gives a lowercase identifier plus the extension the *bytes* say, so a provider's
 opaque `document/1234` becomes `_1234.png` and not an import the editor cannot open.
 
+### 2b. Before anything is packaged: the pre-flight (one call, four answers)
+
+```cpp
+#include "AndroidImportPreflight.h"
+
+std::vector<android::PreflightInput> inputs;   // {fileName = the picker's leaf, prefix = the first 64 KiB}
+android::PreflightOptions options;
+options.androidBitmapFactory = true;           // the phone has BitmapFactory (every API this engine targets)
+options.androidMediaCodec = true;              // and MediaCodec (API 16+)
+options.budget.maxTextureSize = <the tier's limit>;              // Device:: activeTier, not a constant
+options.residentLimitBytes = <the device's texture heap>;        // see below; 0 = say nothing
+const android::PreflightReport report = android::preflightImports(inputs, options);
+
+for (const android::PreflightFinding& finding : report.findings) {
+    if (finding.severity != android::PreflightSeverity::Fine)
+        Out::warning(finding.fileName + ": " + finding.message);
+    for (const std::string& sidecar : finding.missingSidecars)
+        Out::warning("  also import: " + sidecar);
+}
+if (!report.summary.empty()) Out::message(report.summary);   // the first thing to fix
+```
+
+`report.suggestDownscale` names the textures to shrink when `report.overResidentBudget`, largest
+first. `report.broken` counts the assets that will not draw or play. Nothing here reads a file: pass
+the prefix bytes you already read for `importedAssetName`.
+
+The same answer from a terminal, without writing any code:
+`tools/android-asset-report.py <project folder> --resident-mb 128`.
+
+### 2c. A photo that is stored turned
+
+```cpp
+const uint32_t tag = android::readOrientation(prefix);          // 0 when the file has none
+const android::OrientationTransform turn = android::transformFor(android::orientationFromValue(tag));
+if (turn.needed) {
+    // BitmapFactory + Matrix: one decode that is both scaled and turned, which is also the cheapest
+    // fix for a 120 MP photo (bug 6): no decode at full size, no second copy for the rotate
+    matrix.postRotate((float)turn.rotateClockwise);
+    if (turn.flipHorizontal) matrix.postScale(-1.f, 1.f);
+    if (turn.flipVertical)   matrix.postScale(1.f, -1.f);
+    inSampleSize = <the power of two from android::decideImageImport(...).scale>;
+}
+```
+`android::orientedSize(width, height, orientation)` gives the size the picture is shown at, which is
+what a texture's aspect ratio must use.
+
 ### 3. Project place
 
 `android::classifyLocation(path, filesDir, externalFilesDir, treeUri, removable)` →
