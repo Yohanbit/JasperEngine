@@ -13,6 +13,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -363,11 +366,27 @@ namespace je_logger {
         const char* name = category ? category->name : "";
         const bool showCategory = category && std::strcmp(name, "engine") != 0 && std::strcmp(name, "editor") != 0 &&
                                   std::strcmp(name, "lua") != 0 && std::strcmp(name, "build") != 0;
+#if defined(__ANDROID__)
+        // stderr goes nowhere an app can read on Android: it is not logcat, and the process has no
+        // terminal. Everything Log::print writes was therefore invisible on a phone -- which is
+        // why a device boot report carried only the Java-side lines and no line from this engine,
+        // and every diagnosis of the Android editor had to be made from the phone's screen.
+        // __android_log_print puts the same text in logcat, where the boot report's own capture
+        // (EditorBootLog) finds it.
+        if (showCategory) {
+            __android_log_print(ANDROID_LOG_INFO, "JasperEngine", "%s[%s] %.*s", prefix, name,
+                                static_cast<int>(text.size()), text.data());
+        } else {
+            __android_log_print(ANDROID_LOG_INFO, "JasperEngine", "%s%.*s", prefix,
+                                static_cast<int>(text.size()), text.data());
+        }
+#else
         if (showCategory) {
             std::fprintf(stderr, "%s[%s] %.*s\n", prefix, name, static_cast<int>(text.size()), text.data());
         } else {
             std::fprintf(stderr, "%s%.*s\n", prefix, static_cast<int>(text.size()), text.data());
         }
+#endif
     }
 
     // ---- gates (queueMutex held)

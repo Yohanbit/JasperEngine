@@ -57,8 +57,16 @@ public class EditorActivity extends GameActivity {
         // An editor session is long and a screen that dims mid-edit loses work in the user's hands
         getWindow().addFlags(LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // The editor draws behind the bars and keeps its own padding out of the cutout, but the
-        // bars stay reachable: Back still leaves, and the editor's menus sit under them.
+        // Immersive. The status bar was covering the editor's own menu row on a 2400x1080 phone
+        // and the navigation bar was covering the bottom of the dockspace, and hiding them is
+        // worth far more than the two rows of pixels the bars occupy: an editor is a full-screen
+        // tool, and this is how every Android drawing and CAD app behaves.
+        //
+        // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE is what keeps it recoverable without a visible
+        // bar: a swipe from the top edge brings the status bar (and with it the shade) back for a
+        // few seconds, a swipe from the bottom brings the navigation bar. Nothing is lost -- the
+        // app switch and the home gesture keep working over the swipe -- and the first tap puts
+        // the screen back to full.
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         if (VERSION.SDK_INT >= VERSION_CODES.P) {
             getWindow().getAttributes().layoutInDisplayCutoutMode =
@@ -66,9 +74,9 @@ public class EditorActivity extends GameActivity {
         }
         WindowInsetsControllerCompat controller =
                 new WindowInsetsControllerCompat(getWindow(), getWindow().getDecorView());
-        controller.show(WindowInsetsCompat.Type.systemBars());
+        controller.hide(WindowInsetsCompat.Type.systemBars());
         controller.setSystemBarsBehavior(
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                WindowInsetsCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
 
         super.onCreate(savedInstanceState);
     }

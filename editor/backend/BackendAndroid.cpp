@@ -20,7 +20,6 @@
 
 #include "AndroidTextInput.h"
 #include "Engine.h"
-#include "HostServices.h"
 #include "Log.h"
 #include "TextureRender.h"
 
@@ -80,6 +79,10 @@ namespace jasperengine::editor {
         // finger can't drag a slider the first one grabbed.
         int32_t gActivePointerId = -1;
         bool gPointerDown = false;
+        // Where the owning finger was at the last motion event: ImGui's drag is the difference
+        // between two positions queued in one frame, so a MOVE needs the previous point too.
+        float gLastPointerX = 0.0f;
+        float gLastPointerY = 0.0f;
         // the IME's own state, so show/hide is called on a change and not every frame
         bool gSoftKeyboardShown = false;
 
@@ -97,40 +100,36 @@ namespace jasperengine::editor {
         std::vector<unsigned int> gPendingCharacters;
         size_t gPendingBackspaces = 0;
 
-        // The bars' heights in dp, which is what Android itself uses: a status bar is 24 dp,
-        // a gesture navigation bar 24 dp and the three-button one 48 dp. Nothing in native code
-        // can read the real insets -- they are Java's (WindowInsets.getInsets) -- so these are the
-        // platform's own defaults, scaled by the surface's density.
-        constexpr int STATUS_BAR_DP = 24;
-        constexpr int NAV_BAR_GESTURE_DP = 24;
-        constexpr int NAV_BAR_BUTTONS_DP = 48;
-        // the smallest Android phone is ~320 dp wide, so a density below 1 is not a phone
-        constexpr float MIN_DENSITY = 1.0f;
+        // The editor runs immersive (EditorActivity hides the system bars), so the status bar
+        // and the navigation bar no longer overlap anything and their space is NOT reserved:
+        // reserving it was the first attempt, and on the phone the menu row stayed cut because
+        // the inset was being written where ImGui overwrites it every frame (see
+        // platformNewFrame). Two things still overlap a full-screen window:
+        //
+        //  - the camera cutout, in landscape (LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES, which
+        //    EditorActivity sets, deliberately allows the content to fill the cutout's edges);
+        //  - the navigation bar, for the few seconds it is swiped in as a transient overlay.
+        //
+        // Native code cannot read either value -- they are Java's WindowInsets -- and guessing a
+        // cutout width is worse than leaving it, so the insets stay 0 and the content is truly
+        // full screen. If a transient bar is over a button, the tap reveals it for a moment, the
+        // bar hides itself again, and the tap lands.
+        constexpr int TRANSIENT_BAR_DP = 0;
 
-        // dp -> pixels for this surface. Android's baseline is 160 dpi: a 2400x1080 phone is
-        // about 420 dpi, so one dp is ~2.6 px. screenDpi() is the display's own density.
-        float surfaceDensity(){
-            const float dpi = HostServices::screenDpi();
-            if (dpi >= 120.0f)
-                return dpi / 160.0f;
-            return MIN_DENSITY;
-        }
-
-        // Reads the insets the bars occupy, in pixels of this surface, from the display metrics
-        // the engine's HostServices reports. Called once per surface (and again when it changes),
-        // because the values only change with a rotation or a different navigation mode.
         void updateUiInsets(){
-            const float density = surfaceDensity();
-            gInsetTop = static_cast<int>(STATUS_BAR_DP * density + 0.5f);
-            // The gesture bar is the common case on Android 13; three-button navigation is
-            // taller, and over-reserving by 24 dp on the short edge is worse than the bars
-            // overlapping a slider, so the larger of the two is reserved only when the display
-            // is tall enough that it costs nothing. Gesture is the default from Android 10 on.
-            gInsetBottom = static_cast<int>(NAV_BAR_GESTURE_DP * density + 0.5f);
+            gInsetTop = TRANSIENT_BAR_DP;
+            gInsetBottom = TRANSIENT_BAR_DP;
             gInsetLeft = 0;
             gInsetRight = 0;
-            Log::print("[editor] UI insets: top %d, bottom %d px (density %.2f)",
-                       gInsetTop, gInsetBottom, density);
+        }
+
+        // What the frame is actually working with, once per change. It goes to logcat now (Logger
+        // writes there on Android), so the phone's own boot report answers "did the surface come
+        // up, at what size, with what insets" instead of leaving it to a screenshot.
+        void logFrameGeometry(const char* when){
+            Log::print("[editor] %s: surface %dx%d, insets top %d bottom %d, scale %.2f",
+                       when, gWidth, gHeight, gInsetTop, gInsetBottom,
+                       static_cast<double>(ANDROID_UI_SCALE));
         }
 
         double monotonicSeconds(){
@@ -202,6 +201,7 @@ namespace jasperengine::editor {
                       reinterpret_cast<const char*>(glGetString(GL_VERSION)),
                       reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
             gContextUp = true;
+            logFrameGeometry("context up");
             return true;
         }
 
@@ -270,18 +270,13 @@ namespace jasperengine::editor {
             io.DisplaySize = ImVec2(static_cast<float>(gWidth), static_cast<float>(gHeight));
             io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
 
-            // The editor lays itself out in the viewport's WORK area (menu bar, dockspace), so
-            // insetting that is what moves every panel clear of the system bars -- the top menu
-            // row out from under the status bar's clock and battery, the bottom out from under
-            // the gesture bar. Centring: the work area is measured from the surface, so it is
-            // symmetric left/right by construction; the left/right insets exist for a cutout or
-            // a landscape gesture bar and are 0 on a normal portrait phone.
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-            viewport->WorkPos = ImVec2(static_cast<float>(gInsetLeft),
-                                       static_cast<float>(gInsetTop));
-            viewport->WorkSize = ImVec2(
-                static_cast<float>(std::max(0, gWidth - gInsetLeft - gInsetRight)),
-                static_cast<float>(std::max(0, gHeight - gInsetTop - gInsetBottom)));
+            // The system bars are handled by the platform callback registered in
+            // initImGuiPlatform() (Platform_GetWindowWorkAreaInsets), not by writing the
+            // viewport's WorkPos here: this function runs from EditorFrame::render AFTER
+            // renderer->newFrame(), inside an open ImGui frame, and ImGui recomputes the work
+            // rect from WorkInsetMin/Max at the start of every NewFrame -- so an assignment made
+            // here was overwritten before any window read it. The bars therefore never moved,
+            // which is what the device report said.
 
             const double now = monotonicSeconds();
             io.DeltaTime = gLastFrameTime > 0.0
@@ -325,6 +320,24 @@ namespace jasperengine::editor {
             viewport->PlatformUserData = gAndroidApp;
             viewport->PlatformHandle = gAndroidApp ? gAndroidApp->window : nullptr;
             viewport->PlatformHandleRaw = viewport->PlatformHandle;
+
+            // The system bars' space, declared the way ImGui declares it: imgui.h calls this field
+            // "'safeAreaInsets' in iOS land, 'DisplayCutout' in Android land", and NewFrame copies
+            // the value into the main viewport's work rect every frame, before any window is laid
+            // out. Everything the editor positions -- the menu bar, DockSpaceOverViewport, the
+            // hub, the dialogs, the search palette -- reads that rect, so one inset moves all of
+            // them out from under the clock and the gesture bar.
+            //
+            // The returned ImVec4 is (left, top, right, bottom). Left and right are 0: the
+            // surface is measured from its own origin, so the work area is symmetric by
+            // construction and "centred" needs no separate arithmetic.
+            ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+            platformIo.Platform_GetWindowWorkAreaInsets = [](ImGuiViewport*){
+                return ImVec4(static_cast<float>(gInsetLeft),
+                              static_cast<float>(gInsetTop),
+                              static_cast<float>(gInsetRight),
+                              static_cast<float>(gInsetBottom));
+            };
             return true;
         }
 
@@ -351,6 +364,14 @@ namespace jasperengine::editor {
             constexpr int IME_FLAG_NO_FULLSCREEN = 33554432;
             GameActivity_setImeEditorInfo(gAndroidApp->activity, TYPE_CLASS_TEXT,
                                           IME_ACTION_NONE, IME_FLAG_NO_FULLSCREEN);
+            // Only this side's counter is reset, never the IME's own text.
+            //
+            // GameActivity_setTextInputState(empty) was tried and removed: it does not just reset
+            // a counter, it REPLACES the field's content, so tapping a field that already had a
+            // name in it emptied it -- with "New Project", the name vanished as soon as its field
+            // was touched. The engine can afford that call because it sets the field's real value
+            // from its own InputField (NativeEngine.cpp:776); this backend has no such value to
+            // hand over, so it must not claim to.
             Backend::resetKeyboardText();
             GameActivity_showSoftInput(gAndroidApp->activity, 0);
         }else{
@@ -470,8 +491,19 @@ namespace jasperengine::editor {
                     for (int32_t p = 0; p < static_cast<int32_t>(event->pointerCount); ++p){
                         if (event->pointers[p].id != gActivePointerId)
                             continue;
-                        io.AddMousePosEvent(GameActivityPointerAxes_getX(&event->pointers[p]),
-                                            GameActivityPointerAxes_getY(&event->pointers[p]));
+                        const float x = GameActivityPointerAxes_getX(&event->pointers[p]);
+                        const float y = GameActivityPointerAxes_getY(&event->pointers[p]);
+                        // ImGui derives MouseDelta from two positions queued in the SAME frame:
+                        // its input queue keeps the position before the frame and the last one
+                        // queued, and the difference is the drag. Queuing one position per MOVE
+                        // event left both the same -- the delta was 0 -- which is why nothing
+                        // could be dragged or resized on the phone while taps still worked.
+                        // The move that ends there is queued as (previous, current) so the
+                        // difference is the whole step, however many events arrived.
+                        io.AddMousePosEvent(gLastPointerX, gLastPointerY);
+                        io.AddMousePosEvent(x, y);
+                        gLastPointerX = x;
+                        gLastPointerY = y;
                         break;
                     }
                     continue;
@@ -486,8 +518,9 @@ namespace jasperengine::editor {
                 if (action == AMOTION_EVENT_ACTION_DOWN){
                     // a new gesture: its first finger owns the pointer
                     gActivePointerId = pointer->id;
-                    io.AddMousePosEvent(GameActivityPointerAxes_getX(pointer),
-                                        GameActivityPointerAxes_getY(pointer));
+                    gLastPointerX = GameActivityPointerAxes_getX(pointer);
+                    gLastPointerY = GameActivityPointerAxes_getY(pointer);
+                    io.AddMousePosEvent(gLastPointerX, gLastPointerY);
                     io.AddMouseButtonEvent(0, true);
                     gPointerDown = true;
                     continue;
