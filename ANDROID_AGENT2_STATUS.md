@@ -47,6 +47,7 @@ headers added here follow it exactly, which also means:
 
 | # | Question | Answer (evidence) | Label |
 | --- | --- | --- | --- |
+| 0f | Is a per-file verdict enough to predict a phone's failure? | No: the common failure is the sum. 20 atlases at 2048x2048 are each inside every limit and 320 MiB resident together, which a mid-range GPU heap does not have; the project loads on a desktop and dies in the level load with no file to blame | verified (test + tool on a 20-atlas folder) |
 | 0e | How is the pre-flight run? | Nothing in the repo runs a C++ tool over a project folder, so the checks existed only for whoever compiled the test suite. `tools/` is Python-only. Answer: a Python driver with a generated C++ builder over the real headers, so the verdicts cannot drift | verified (built and run) |
 | 0d | Can a .gltf be imported on a phone? | Not on its own: buffers/images are relative URIs resolved through tinygltf's fs callbacks against the .gltf's directory (`MeshSystem.cpp:2116`), and a picker gives one `content://` per file with no directory. GLB is self-contained | verified (read + `tiny_gltf.h:3297`) |
 | 0c | Could the existing checks answer "will my project work on this phone"? | No: each answers one file and one question. Nothing composed them, and the failure modes the composition finds are exactly the ones a desktop never shows (accepted-then-undecodable WebP, a 183 MB decode, a sideways photo, a silently renamed duplicate) | verified (the report's first run, 4 tests red) |
@@ -62,7 +63,7 @@ headers added here follow it exactly, which also means:
 ## 3. Implemented (this branch)
 
 All nine (eight headers) are free of Android headers, no new build wiring, C++20,
-`-Wall -Wextra -Werror` clean on GCC 12, and **52 gtest cases passing**. A runnable tool exposes the
+`-Wall -Wextra -Werror` clean on GCC 12, and **54 gtest cases passing**. A runnable tool exposes the
 whole thing: `tools/android-asset-report.py <project>`. Every header is included
 twice by the suite on purpose (see bug 10d). See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.

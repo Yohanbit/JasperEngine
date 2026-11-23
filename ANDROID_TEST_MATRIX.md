@@ -24,7 +24,7 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path | 5 |
 
-Total: **52 cases, 52 pass, 0 skipped, 0 disabled.**
+Total: **54 cases, 54 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -91,6 +91,9 @@ not repeated here.
 | `AndroidImportPreflight.AGltfThatNeedsItsBuffersIsANote...` | a .gltf with a buffer and an image → Note, 2 `missingSidecars`; a non-JSON .gltf → Broken | pass |
 | `AndroidImportPreflight.AGlbIsOneFileAndNothingToSay` | a GLB → Fine, no message | pass |
 
+| `AndroidImportPreflight.AFortyTextureProjectIsOutOfMemoryOnAPhoneAndTheReportSaysWhichToShrink` | 20 × 2048² RGBA, budget 128 MiB → 0 broken, 320.0 MB resident, summary, `suggestDownscale` named | pass (**red**: advice was unstable between runs) |
+| `AndroidImportPreflight.AProjectInsideItsBudgetSaysNothingAboutMemory` | 2 × 256² under the budget → no summary | pass |
+
 ### The double-include guard
 
 The suite includes `AndroidAssetImport.h`, `AndroidImageLimits.h`, `AndroidImageOrientation.h` and
@@ -133,8 +136,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 52 tests from 8 test suites ran. (0 ms total)
-[  PASSED  ] 52 tests.
+[==========] 54 tests from 8 test suites ran. (0 ms total)
+[  PASSED  ] 54 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
@@ -189,3 +192,13 @@ first to fix: clip.m4a: no decoder in this engine reads this audio; export it as
 Exit codes are the contract: `1` (the line above), `0` with `--bitmap-factory --media-codec`
 ("6 assets: 0 broken, 4 to note"), `0` for an empty folder, `2` for a path that is not a folder.
 `notes.txt` is not scanned at all. The first run of this tool is what found the `.m4a` bug above.
+
+### The aggregate case, on a folder (`--resident-mb 128`)
+
+```
+20 assets: 0 broken, 20 to note
+largest single decode: 16.0 MB
+all textures resident: 320.0 MB
+shrink first: atlas_00.png, atlas_01.png, ... atlas_15.png
+first to fix: the project's textures take 320.0 MB, past the 128.0 MB this device has for them
+```
