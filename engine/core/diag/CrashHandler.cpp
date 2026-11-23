@@ -6,13 +6,6 @@
 // report hook and the deliberate crashes. Nothing here runs inside a signal handler; the
 // handler-side code is CrashHandlerPosix.cpp, CrashHandlerWin.cpp and CrashHandlerWeb.cpp.
 
-// _GNU_SOURCE before any system header: Bionic gates dl_iterate_phdr and struct dl_phdr_info on it,
-// and the NDK toolchain does not define it. A feature macro set after a header has been read does
-// nothing, which is why this is the first line of code in the file.
-#if defined(__ANDROID__) && !defined(_GNU_SOURCE)
-    #define _GNU_SOURCE
-#endif
-
 #include "CrashHandler.h"
 #include "detail/CrashState.h"
 
@@ -52,21 +45,14 @@
     #include <mach-o/loader.h>
     #include <csignal>
 #else
-    #if defined(__ANDROID__)
-    // Bionic declares dl_iterate_phdr and struct dl_phdr_info in <dlfcn.h>, and only when
-    // _GNU_SOURCE is defined -- which the NDK's CMake toolchain does not set by default, so both
-    // were undeclared here ("use of undeclared identifier dl_iterate_phdr", "incomplete type
-    // struct dl_phdr_info"). <elf.h> is present, but the ElfW() macros are glibc's, not Bionic's,
-    // so they are defined below from __LP64__ -- the same thing they expand to everywhere else.
-    #include <dlfcn.h>
+    // <link.h> is where the module list lives on every ELF platform: it declares dl_iterate_phdr,
+    // struct dl_phdr_info and the ElfW() macro, and Bionic and glibc agree on that. Reaching for
+    // <dlfcn.h> instead cost two device builds -- one where ElfW was an unknown type, then one
+    // where dl_iterate_phdr was undeclared and dl_phdr_info incomplete. The PT_* and NT_* guards
+    // below are belt and braces: <elf.h> carries them, but the module walk is the only place the
+    // process's build id is read, and a silently missing constant there would be invisible.
+    #include <link.h>
     #include <elf.h>
-    #ifndef ElfW
-        #if defined(__LP64__)
-            #define ElfW(type) Elf64_##type
-        #else
-            #define ElfW(type) Elf32_##type
-        #endif
-    #endif
     #ifndef PT_LOAD
         #define PT_LOAD 1
     #endif
@@ -75,10 +61,6 @@
     #endif
     #ifndef NT_GNU_BUILD_ID
         #define NT_GNU_BUILD_ID 3
-    #endif
-    #else
-    #include <link.h>
-    #include <elf.h>
     #endif
     #include <csignal>
 #endif

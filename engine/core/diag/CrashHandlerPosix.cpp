@@ -5,13 +5,6 @@
 // syscall(gettid), prctl, prewarmed backtrace/backtrace_symbols_fd (_Unwind_Backtrace on
 // Android), __android_log_write, and Logger::flushForCrash (only atomics + clock/sleep).
 // No stdio, heap allocation, symbol-loader calls or locks are permitted in that path.
-// _GNU_SOURCE first, before any system header: Bionic gates dl_iterate_phdr and struct
-// dl_phdr_info on it, and a feature macro set after a header has been read has no effect. The NDK
-// toolchain does not define it, so a device build failed with "undeclared identifier
-// dl_iterate_phdr" while the same file compiled on every desktop.
-#if defined(__ANDROID__) && !defined(_GNU_SOURCE)
-    #define _GNU_SOURCE
-#endif
 
 #include "detail/CrashState.h"
 #include "detail/CrashFrames.h"
@@ -52,11 +45,12 @@
 #endif
 #else
 #if defined(__ANDROID__)
-// Bionic has no <link.h>: dl_iterate_phdr is declared in <dlfcn.h> there, and only with
-// _GNU_SOURCE, which the NDK toolchain does not define for us. prctl() lives in <sys/prctl.h>.
-// PT_LOAD is in <elf.h>, which Bionic does ship -- but not through <dlfcn.h>, so it is included
-// here and the constant is given its value if that header does not provide it (the value is the
-// ABI's, not an implementation detail: 1 is PT_LOAD on every ELF platform).
+// <link.h> is where Bionic declares dl_iterate_phdr, struct dl_phdr_info and ElfW() -- the same
+// place glibc does. <dlfcn.h> was assumed to have them and does not, which is what a device build
+// reported ("use of undeclared identifier dl_iterate_phdr", "unknown type name dl_phdr_info").
+// prctl() lives in <sys/prctl.h>. PT_LOAD comes from <elf.h>; the guard is belt and braces, since
+// 1 is PT_LOAD on every ELF platform and a missing constant would silently skip the module walk.
+#include <link.h>
 #include <dlfcn.h>
 #include <elf.h>
 #ifndef PT_LOAD
