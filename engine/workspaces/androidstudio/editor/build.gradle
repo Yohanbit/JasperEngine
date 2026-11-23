@@ -17,10 +17,9 @@ tasks.register('syncSharedJava', Sync) {
     }
     into layout.buildDirectory.dir("shared-java")
 }
-// afterEvaluate: preBuild is registered by the android plugin, which runs after this block
-afterEvaluate {
-    tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'syncSharedJava' }
-}
+// Tied to the Java compile itself, not to preBuild: the android plugin registers its lifecycle
+// tasks after this block, and a name that does not exist makes the dependency silently never run.
+tasks.withType(JavaCompile).configureEach { dependsOn 'syncSharedJava' }
 
 android {
     compileSdk 36

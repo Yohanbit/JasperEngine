@@ -120,6 +120,10 @@ jobs:
       # a build is fixed by, so ten of them per failing step is what this needs.
       - name: Annotate the build errors
         if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # a pull_request event carries it; a dispatch has to be told which PR is open
+          PR_NUMBER: ${{ github.event.pull_request.number || '1' }}
         run: |
           # Each logged.sh step overwrites build/test-results/<its own name>.log, so the APK step's
           # real output is in the build directory it wrote into, not in the log that survived.
@@ -145,6 +149,23 @@ jobs:
           if [[ $found -eq 0 ]]; then
             echo "::error::the Android build failed and wrote no log to annotate"
             ls -la build/android build/test-results 2>/dev/null || true
+          fi
+
+          # The run's logs and artifacts cannot be downloaded from outside this runner, but a PR
+          # comment can be read from anywhere. Only the compiler's own lines and the build's
+          # summary go in, so the comment stays useful rather than being the whole log.
+          if [[ -n ${PR_NUMBER:-} ]]; then
+            {
+              echo "<!-- android-build-errors -->"
+              printf 'Android build failed on `%s`.\n\n' "${GITHUB_SHA:0:8}"
+              for log in "${logs[@]}"; do
+                [[ -f $log ]] || continue
+                printf '<details><summary><code>%s</code></summary>\n\n```\n' "$log"
+                grep -nE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|symbol:|location:|required:|found:|Execution failed" "$log" | head -n 80
+                printf '```\n</details>\n\n'
+              done
+            } > build/errors.md
+            gh pr comment "$PR_NUMBER" --body-file build/errors.md || true
           fi
           exit 0
 
