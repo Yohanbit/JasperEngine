@@ -116,9 +116,17 @@ python3 tools/android/data-overflow-real.py; echo "exit $?"   # 1: defect presen
 
 ## What is *not* reproducible here, and why
 
-- **An APK.** This machine has no `javac`, no Android SDK, no NDK and no emulator, so
-  `tools/build.sh android` and the Gradle build cannot run. Anything about a phone running this code
-  is unverified, which is the rule this branch follows everywhere.
+- **An APK.** Not on this machine, and not for want of trying. `tools/build.sh android` runs
+  `./gradlew assembleDebug` inside the `android` image, and every piece of that is a network host this
+  sandbox cannot reach: `services.gradle.org` (the 9.6.0 distribution the wrapper pins),
+  `dl.google.com` (the command-line tools, `platforms;android-36`, `build-tools;36.0.0`, NDK
+  `28.2.13676358`) and Maven/Google's artifact hosts (`androidx.games:games-activity:2.0.2`,
+  `games-frame-pacing`, `appcompat`, `com.google.androidgamesdk:game-activity`, and AGP itself). Only
+  PyPI answers here. There is also no `javac`, no Docker (so no image), no `cmake`/`ninja` and no
+  emulator. A hand-built APK needs the same downloads: an `android.jar` for `GameActivity`, `aapt2`
+  for the manifest and resources, and `d8` for the bytecode — all of them from `dl.google.com`. So
+  anything about a phone running this code stays unverified, which is the rule this branch follows
+  everywhere.
 - **`tools/check_headers.py --all`.** It wants `build/linux/editor` and ninja; only
   `--self-test` runs here, and it passes.
 - **The CMake test targets.** `tools/run-sanitizer-tests.sh` and `tools/build.sh unit-tests` need a
