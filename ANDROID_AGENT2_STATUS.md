@@ -47,6 +47,7 @@ headers added here follow it exactly, which also means:
 
 | # | Question | Answer (evidence) | Label |
 | --- | --- | --- | --- |
+| 0b | Does anything read EXIF? | No: `grep -ri exif engine/core/texture` is empty and `TextureData` offers `flipVertical` only, so a portrait phone photo lands sideways with its width and height swapped | verified (grep + `TextureData.h:149`) |
 | 0 | What does the engine decode, really? | stb_image (PNG, JPEG, BMP, TGA, GIF, PSD, PNM, HDR, PIC; **no WebP, no HEIC/AVIF**), own KTX2/Basis path, SVG, tinyexr; SoLoud's dr_wav/dr_mp3/dr_flac/stb_vorbis. A phone shares photos as WebP and iPhone photos as HEIC | verified (grep + `stb_image.h` feature list + `soloud/src/audiosource/wav/`) |
 | 1 | Does the runtime have an Android file system layer already? | Yes. `JasperEngineAndroid.cpp:206-235` maps `data://` to `getFilesDir()` and `asset://`/`lua://` through `AAssetManager` via `funopen`; `FileUtils.cpp:128` already refuses `asset://` writes on Android and knows only `data://` is on the file system. Saves work. | inferred (code read) |
 | 2 | What does an Android import lack? | A picked file is a `content://` URI, not a path. There is no URI → name → legal project name → free name → asset type path anywhere in `engine/` or `editor/` (`grep` for `content://`, percent-decoding, sanitizing, unique naming: nothing in the runtime; the editor's table `editor/asset/AssetTypes.cpp` maps extensions only). | inferred |
@@ -57,8 +58,8 @@ headers added here follow it exactly, which also means:
 
 ## 3. Implemented (this branch)
 
-All six (five headers) are free of Android headers, no new build wiring, C++20, `-Wall -Wextra -Werror`
-clean on GCC 12, and 34 gtest cases passing. See `ANDROID_TEST_MATRIX.md` for the evidence of every
+All seven (six headers) are free of Android headers, no new build wiring, C++20, `-Wall -Wextra -Werror`
+clean on GCC 12, and 38 gtest cases passing. See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
 
 | File | What it provides | State |

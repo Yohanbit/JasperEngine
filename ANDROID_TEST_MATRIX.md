@@ -18,7 +18,9 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidAssetImport` (decode/playback support) | same | WebP gap, the formats the engine reads, the audio decoder set | 3 |
 
-Total: **34 cases, 34 pass, 0 skipped, 0 disabled.**
+| `AndroidImageOrientation` | same | the tag in JPEG and PNG, malformed tags, all eight transforms, swapped sizes | 4 |
+
+Total: **38 cases, 38 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -64,6 +66,11 @@ not repeated here.
 | `AndroidAssetImport.TheFormatsTheEngineReadsAreSupported` | PNG/JPEG/GIF/PSD/HDR/KTX2 supported; text goes to the decoder; AVIF unsupported | pass (**red**: AVIF was `Unknown`, indistinguishable from any file, before `ImportKind::IsoBmff`) |
 | `AndroidAssetImport.AudioSupportFollowsTheDecoderSet` | WAV/OGG/MP3/FLAC supported (the four decoders linked); M4A needs MediaCodec, else refused with a sentence | pass |
 
+| `AndroidImageOrientation.ReadsTheTagFromJpegAndPng` | 6/3/1/8 (big-endian) from a JPEG, 7 from a PNG; no tag on a screenshot | pass (fixture bugs found first) |
+| `AndroidImageOrientation.AMalformedTagIsIgnoredNotFatal` | wrong field type, IFD offset past the segment, a value outside 1..8 | pass |
+| `AndroidImageOrientation.EveryValueHasATransform` | the eight values' rotation and swap, `isUpright` | pass (**red**: 1 was reported as "needs work") |
+| `AndroidImageOrientation.ARotatedPhotoReportsSwappedDimensions` | 4000x3000 + 6 → 3000x4000; a mirror and a 180 do not swap | pass |
+
 ### Fuzzing (verified, sanitizers)
 
 `/tmp/fuzz.cpp` (not committed; reproduce below) feeds every truncation of eight real header
@@ -76,15 +83,22 @@ ok: 400209 inputs, no out-of-bounds read and no impossible size
 ```
 
 The second run also drove `decodeSupportOf`, `playbackSupportOf` and `decideImageImport` over the
-same inputs (the ISO-BMFF path reads bytes 4..7, which is where a truncation bites).
+same inputs (the ISO-BMFF path reads bytes 4..7, which is where a truncation bites); the third added
+`readOrientation` (a JPEG marker walk and a PNG chunk walk, the two places a length field decides
+where the next read is).
+
+The orientation work took five rounds to get its *fixtures* right (a PNG CRC one byte short, twice;
+a big-endian tag encoded in the little-endian order; an IHDR data length). Each round failed a test
+that named the wrong number, which is the reason the fixture is now built from a named chunk array
+rather than a counted literal.
 
 ## How it was run (verified)
 
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 34 tests from 5 test suites ran. (0 ms total)
-[  PASSED  ] 34 tests.
+[==========] 38 tests from 6 test suites ran. (0 ms total)
+[  PASSED  ] 38 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
