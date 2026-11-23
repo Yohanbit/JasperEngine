@@ -24,7 +24,7 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path | 5 |
 
-Total: **51 cases, 51 pass, 0 skipped, 0 disabled.**
+Total: **52 cases, 52 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -67,6 +67,7 @@ not repeated here.
 | `AndroidImageLimits.ExtremesDoNotOverflow` | 0x7FFFFFFF² does not wrap; 16-bit saturates | pass (**red**: my first assertion assumed saturation one step too early) |
 
 | `AndroidAssetImport.WebPIsAcceptedButFlaggedAsUndecodable` | a WebP classifies as a Texture *and* the import says it must become PNG | pass (**red**: the test caught that my `std::string("RIFF\0...")` literal truncated at the NUL and WebP was `Unknown`) |
+| `AndroidAssetImport.APhoneFormatIsClassifiedByItsExtensionWhenTheMagicIsNotEnough` | `.m4a` (ISO-BMFF bytes), `.aac`, `.opus` → Audio; `.webp`, `.heic`, `.avif` → Texture | pass (**red**: `.m4a` was Unknown, "copied as it is") |
 | `AndroidAssetImport.TheFormatsTheEngineReadsAreSupported` | PNG/JPEG/GIF/PSD/HDR/KTX2 supported; text goes to the decoder; AVIF unsupported | pass (**red**: AVIF was `Unknown`, indistinguishable from any file, before `ImportKind::IsoBmff`) |
 | `AndroidAssetImport.AudioSupportFollowsTheDecoderSet` | WAV/OGG/MP3/FLAC supported (the four decoders linked); M4A needs MediaCodec, else refused with a sentence | pass |
 
@@ -132,8 +133,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 51 tests from 8 test suites ran. (0 ms total)
-[  PASSED  ] 51 tests.
+[==========] 52 tests from 8 test suites ran. (0 ms total)
+[  PASSED  ] 52 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
@@ -164,3 +165,27 @@ Docker, so that lane is CI's).
 | The Java side of the picker | needs Android SDK; not JVM-testable | `ANDROID_AGENT2_STATUS.md` §5.1 |
 | `StatFs` numbers from a real volume | needs the platform seam (`System.h`, main agent) | §5.2 |
 | Decoding each of the 20 magic kinds on Android | needs an import run per kind on a device | §5.4 |
+
+### The runnable tool (`tools/android-asset-report.py`, verified on a folder)
+
+A folder built for the test — `art/backdrop.png` (8000x6000), `art/icon.png` (64x64), `ui/icon.webp`,
+`models/Body.gltf` naming a `.bin` and a texture, `audio/song.mp3`, `audio/clip.m4a`, `notes.txt`:
+
+```
+- backdrop.png -> backdrop.png (texture)
+    reduced from 8000x6000 to 4000x3000 (50% of each side) to fit a 4096 texture; one decode peaks at 137.3 MB
+! clip.m4a -> clip.m4a (audio)
+    no decoder in this engine reads this audio; export it as WAV, OGG, MP3 or FLAC
+- Body.gltf -> body.gltf (model)
+    needs 1 buffer file and 1 texture file; a phone imports one file at a time, so they must be imported too
+! icon.webp -> icon.webp (texture)
+    this build has no WebP decoder; the photo must be converted to PNG before it can be used
+
+6 assets: 2 broken, 2 to note
+largest single decode: 183.1 MB
+first to fix: clip.m4a: no decoder in this engine reads this audio; export it as WAV, OGG, MP3 or FLAC
+```
+
+Exit codes are the contract: `1` (the line above), `0` with `--bitmap-factory --media-codec`
+("6 assets: 0 broken, 4 to note"), `0` for an empty folder, `2` for a path that is not a folder.
+`notes.txt` is not scanned at all. The first run of this tool is what found the `.m4a` bug above.
