@@ -66,12 +66,13 @@ def identity(manifest: dict | None = None, commit: str | None = None) -> dict:
         build_number = release.get("number", manifest.get("buildNumber", 0))
         version_code = release.get("versionCode") or build_number
     else:
-        # An unpublished commit is the next build after everything published, and it is numbered
-        # ABOVE every release: Android refuses to install a lower versionCode over a higher one, so
-        # a candidate that reused a released number could not be tried on a phone that already has
-        # that release.
+        # An unpublished commit is the next build after everything published, and both of its
+        # numbers are ABOVE every release: Android refuses to install a lower versionCode over a
+        # higher one, so a candidate that reused a released number could not be tried on a phone
+        # that already had that release. (The build number can be ahead of every published
+        # versionCode -- V8 was built before the manifest existed -- so the code follows both.)
         build_number = manifest.get("buildNumber", 0) + 1
-        version_code = highest_code + 1
+        version_code = max(highest_code, build_number) + 1
     result = {
         "commit": commit,
         "shortCommit": commit[:9],

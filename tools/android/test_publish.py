@@ -114,6 +114,13 @@ class Identity(unittest.TestCase):
         # and its versionCode is above every published one, so it installs over them
         self.assertGreater(ident["versionCode"], 9)
 
+    def test_a_candidate_code_is_above_the_releases_and_the_build_number(self):
+        # V8 was built before the manifest recorded codes: its code (1) is BELOW the manifest's
+        # build number (8), and a candidate must still out-rank both or it cannot be installed.
+        ident = release_identity.identity(self.MANIFEST, commit="c" * 40)
+        self.assertGreater(ident["versionCode"], 9)   # the published RC1
+        self.assertGreaterEqual(ident["versionCode"], 8)  # the manifest's build number
+
     def test_the_gradle_line_carries_every_field(self):
         line = release_identity.gradle_assignments(
             release_identity.identity(self.MANIFEST, commit="a" * 40))
