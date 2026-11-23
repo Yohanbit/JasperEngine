@@ -163,7 +163,7 @@ namespace jasperengine::editor {
                 eglSwapInterval(gDisplay, interval);
         }
 
-        RendererPlatform::GLProc getProcAddress(const char*){
+        GLProc getProcAddress(const char*){
             return nullptr;
         }
 
@@ -262,9 +262,9 @@ namespace jasperengine::editor {
         if (!gAndroidApp || !gAndroidApp->activity)
             return;
         if (show){
-            // the engine's own call, same flags: a text field's keyboard edits in place
-            constexpr int IME_ACTION_NONE = 1;
-            constexpr int IME_FLAG_NO_FULLSCREEN = 33554432;
+            // The engine's own call and flags (NativeEngine.cpp:549). IME_ACTION_NONE and
+            // IME_FLAG_NO_FULLSCREEN come from GameActivity.h: declaring them here would shadow
+            // the macros and fail to compile.
             GameActivity_setImeEditorInfo(gAndroidApp->activity, InputType_dot_TYPE_CLASS_TEXT,
                                           IME_ACTION_NONE, IME_FLAG_NO_FULLSCREEN);
             GameActivity_showSoftInput(gAndroidApp->activity, 0);

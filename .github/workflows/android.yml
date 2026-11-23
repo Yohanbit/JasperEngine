@@ -32,6 +32,8 @@ on:
 permissions:
   contents: read
   actions: write  # the prune step deletes this lane's older ccache entries (the repository's 10 GB)
+  pull-requests: write  # a failing build posts its own errors to the PR: this run's logs and
+                        # artifacts cannot be downloaded from outside the runner
 
 # one run per ref: a new dispatch supersedes the one still building
 concurrency:
@@ -143,6 +145,10 @@ jobs:
               start=$(grep -nE "^\* What went wrong|^FAILURE:|^\* Where:|cmake_error" "$log" | head -1 | cut -d: -f1)
               if [[ -n $start ]]; then
                 sed -n "${start},\$p" "$log" | head -n 50
+              fi
+              # the CMake configure's own error, if the configure is what failed
+              if grep -qE "CMake Error" "$log"; then
+                awk '/CMake Error/{f=1} f' "$log" | head -n 40
               fi
               echo "--- last 40 lines ---"
               tail -n 40 "$log"
