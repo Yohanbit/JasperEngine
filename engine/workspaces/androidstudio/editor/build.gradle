@@ -91,7 +91,9 @@ android {
             // platform/android/java wholesale: that directory holds the game runtime's
             // MainActivity and its lifecycle bridge, which this app neither needs nor can load
             // (they link the game's native library).
-            java.srcDirs = ['src/main/java', layout.buildDirectory.dir("shared-java").get().asFile]
+            // "$buildDir", not layout.buildDirectory: this block is evaluated before the plugin
+            // creates the build directory, and the string is resolved when the task reads it
+            java.srcDirs = ['src/main/java', "$buildDir/shared-java"]
         }
     }
 
