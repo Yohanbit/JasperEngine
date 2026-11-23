@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <set>
+#include <system_error>
 
 using namespace jasperengine;
 using namespace jasperengine::editor;
@@ -77,6 +78,14 @@ hub::LaunchOptions& hub::launchOptions() {
 fs::path ProjectHubWindow::defaultLocation() {
     const fs::path last = AppSettings::getHubLastLocation();
     if (!last.empty()) return last;
+    // Android has no HOME and current_path() is "/", so homeDirectory()/… would be
+    // "/JasperEngine Projects": a path no app may create. EditorPaths.java (started before the
+    // first frame) points this at the app's own files/projects, which is writable and survives an
+    // update. On desktop the variable is unset and the path is unchanged.
+    if (const char* projects = std::getenv("JASPERENGINE_ANDROID_PROJECTS_DIR"); projects && *projects) {
+        std::error_code ec;
+        if (fs::create_directories(projects, ec) || fs::is_directory(projects, ec)) return fs::path(projects);
+    }
     return homeDirectory() / "JasperEngine Projects";
 }
 
