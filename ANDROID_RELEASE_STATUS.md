@@ -4,7 +4,7 @@ The single place that says which APK is which. **Only this document and `tools/a
 name a release**; an APK built from any other branch is a test artifact and is never called a
 release.
 
-Last updated: 2026-11-23 (build `f68b39ea7` + release tooling)
+Last updated: 2026-11-23 (build `7aa5c30e2`; CI still red, see §3)
 
 ## 1. The version ladder
 
@@ -40,24 +40,40 @@ So the chain APK → commit → release name is checkable without trusting a rep
 | --- | --- |
 | Latest candidate | **none yet published** |
 | Current stable | **none** (V8 is the reference, not a release of this port) |
-| Branch | `arena/b99b8fb3-jasperengine` (this session's branch; branched from `arena/8286230a-jasperengine` at `d996af6e`) |
-| Commit of the last verified fix | `f68b39ea7` — the editor APK's Java source set |
+| Branch | `arena/b99b8fb3-jasperengine` — the integration branch: contains `origin/main` (`92295dbf`) and agent 1's branch (`daebd94b`) in full, plus this session's fixes |
+| Commit of the last verified fix | `7aa5c30e2` — the view tools' GLES include |
 | CI lane | `.github/workflows/android.yml` (dispatch on this branch) |
 | Download | none yet |
 
 ### Why there is no RC1 yet
 
-The lane has been red since `d996af6e`:
+The lane has been red since `d996af6e`. Each failure was a real compile error in the editor's
+native half, found one at a time because the compiler stops at the first:
 
-| Run | Result | Cause |
-| --- | --- | --- |
-| 45094805556 | failed (step `APK`) | the game APK's Gradle build ran `:editor`'s configure first |
-| 45096041001 | failed (step `APK`) | `EditorActivity.java:15/48/50/81 cannot find symbol` — see below |
-| 45096599335 | **in progress** (verifies `f68b39ea7`) | — |
+| Run | Result | Cause | Fixed by |
+| --- | --- | --- | --- |
+| 45094805556 | failed (step `APK`) | the game APK's Gradle build ran `:editor`'s configure first | — |
+| 45096041001 | failed (step `APK`) | `EditorActivity.java:15/48/50/81 cannot find symbol` — `:editor`'s Java source set pointed at `<root>/platform/android/java`, which does not exist (the file is at `engine/platform/android/java`) | `f68b39ea7` |
+| 45096599335 | failed (step `APK`) | `editor/cli/McpClient.cpp`: `use of undeclared identifier 'posix_spawn'` (Bionic has no `posix_spawn`, and an app may not exec) | `1d204377c` |
+| 45099004930 | failed (step `APK`) | `editor/mcp/tools/ViewTools.cpp:97: fatal error: 'GL/gl.h' file not found` (Android has GLES only) | `7aa5c30e2` |
+| 45100443573 | running | verifies `7aa5c30e2` | — |
 
-The error was `:editor`'s Java source set pointing at `<root>/platform/android/java`, which does not
-exist (the file is at `engine/platform/android/java`, as `app/build.gradle` names it). One broken
-module failed the whole Gradle invocation — `:app`, the game APK, included.
+The `Annotate the build errors` step is what makes this readable from outside the runner: before it,
+a run said only `Process completed with exit code 1`. It is worth knowing that GitHub's annotation
+*line numbers* are not the file's lines (they point into `.github`), but the messages are verbatim.
+
+### How RC1 will be cut, when the lane is green
+
+```
+gh workflow run android.yml --ref arena/b99b8fb3-jasperengine \
+    -f abis=arm64-v8a -f release_name="Android RC1" -f release_kind=rc
+```
+
+That runs the same two APK builds, then a `release` job that refuses a reused name, reads the
+identity back out of the packaged APK, records the SHA-256 in `tools/android/releases.json`, and
+attaches both APKs to a GitHub release. It has **never run**; its YAML parses and its Python is
+tested, but the first execution will be RC1 itself, and this document gets the real run id and
+hashes only after that.
 
 ## 4. Tests: what has actually been run
 
