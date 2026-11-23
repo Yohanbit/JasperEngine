@@ -851,6 +851,7 @@ android)
         if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
             echo \"android: NDK \$ndk is not in the image; AGP installs it on the first build\" >&2
         fi
+        echo \"android: past the NDK check, about to look for the identity\" >&2
         # build/.cache/identity.args names this APK (tools/android/release_identity.py --gradle):
         # one -P per line, read with mapfile so a value may contain a space ("Android RC1").
         # It lives under .cache and not in build/android because --clean removes $OUT, which for
