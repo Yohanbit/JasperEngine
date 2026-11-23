@@ -122,6 +122,16 @@ namespace jasperengine::android {
         plan.temporary = folder + IMPORT_TEMP_PREFIX + recoverable + IMPORT_TEMP_SUFFIX;
         plan.expectedBytes = expectedBytes;
         if (existingTemporaryBytes == 0) return plan;
+        if (expectedBytes == 0) {
+            // The provider did not say how big the file is, so there is no way to tell whether the
+            // bytes on disk are a prefix of *this* file or a leftover of another one: resuming would
+            // ask the provider to skip past bytes it may never have sent, and the result would be a
+            // truncated file that settleTransfer() calls Complete because a sizeless stream's end
+            // is its only signal. Starting over is the only answer that cannot corrupt the asset.
+            plan.discardPartial = true;
+            plan.resumeFrom = 0;
+            return plan;
+        }
         // a partial that is already the whole file (a crash between the last write and the rename)
         // needs no copy at all: the caller renames it
         if (expectedBytes > 0 && existingTemporaryBytes == expectedBytes) {
@@ -151,7 +161,10 @@ namespace jasperengine::android {
             step.skipBytes = 0;
             step.copyBytes = chunkBytes;
             step.outcome = TransferOutcome::Interrupted;
-            step.message = "the copy starts over: the file it was making is not this one";
+            step.message = plan.expectedBytes == 0
+                               ? "the copy starts over: the provider does not say how big the file is, "
+                                 "so what is already on disk cannot be trusted to be part of it"
+                               : "the copy starts over: the file it was making is not this one";
             return step;
         }
         // the source is where the copy resumes: its bytes before `resumeFrom` are already on disk

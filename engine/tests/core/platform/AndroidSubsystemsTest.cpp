@@ -462,6 +462,19 @@ TEST(AndroidProjectLayout, RefusesAPathThatLeavesTheProject) {
     EXPECT_FALSE(isInsideProject("textures/../../a.png")) << "a provider's name is not trusted";
     EXPECT_FALSE(isInsideProject("c:/a.png"));
     EXPECT_FALSE(isInsideProject("a\\b.png"));
+    // An absolute path is not inside anything, and on Linux/macOS a leading '/' makes a join
+    // drop the project folder entirely: a provider's name must never take that route.
+    EXPECT_FALSE(isInsideProject("/etc/passwd"));
+    EXPECT_FALSE(isInsideProject("//server/share"));
+    // the empty name joins to the folder itself rather than to a file in it
+    EXPECT_FALSE(isInsideProject(""));
+    // "." is navigation, not a file: it is refused wherever it appears as a whole segment
+    EXPECT_FALSE(isInsideProject("."));
+    EXPECT_FALSE(isInsideProject("./a.png"));
+    EXPECT_FALSE(isInsideProject("a/./b.png"));
+    EXPECT_FALSE(isInsideProject("a/."));
+    // a trailing separator names the folder the file would be in, not a file
+    EXPECT_TRUE(isInsideProject("textures/"));
 }
 
 TEST(AndroidProjectLayout, ClassifiesWhereTheProjectIs) {
@@ -1046,6 +1059,20 @@ TEST(AndroidImportPreflight, AFileThatIsNotAnAssetIsCopiedAndNotReportedAsBroken
 
 // ---- model sidecars
 
+TEST(AndroidAssetImport, AWindowsDeviceNameIsMadeOneInsteadOfBreakingTheProjectOnAWindowsMachine) {
+    // "con.png" imports and plays on the phone; on Windows it cannot be created, copied or
+    // deleted, so the project opens with a missing asset and nothing on the phone showed it
+    for (const char* name : {"con.png", "NUL.PNG", "aux.png", "PRN.txt", "com1.png", "LPT9.png"}) {
+        const std::string sanitized = sanitizeFileName(name);
+        EXPECT_EQ(sanitized.front(), '_') << name << " -> " << sanitized;
+        expectLegalName(sanitized);
+    }
+    // and a name that merely starts with one is not reserved
+    EXPECT_EQ(sanitizeFileName("console.png"), "console.png");
+    EXPECT_EQ(sanitizeFileName("com10.png"), "com10.png") << "COM10 is an ordinary name";
+    EXPECT_FALSE(isWindowsDeviceName("CONSOLE"));
+}
+
 TEST(AndroidAssetImport, APhoneFormatIsClassifiedByItsExtensionWhenTheMagicIsNotEnough) {
     // .m4a is ISO-BMFF, which many containers share: calling it Unknown said "copied as it is"
     // instead of "will not play", and made playbackSupportOf unreachable for the format it exists
@@ -1553,4 +1580,41 @@ TEST(AndroidImportPreflight, ACompanionWithAFolderInItsNameStillMatchesItsLeaf) 
     file.prefix.assign(gltf.begin(), gltf.end());
     file.companionNames = {"downloads/Body.bin"};
     EXPECT_TRUE(preflightOne(file, PreflightOptions{}).absentSidecars.empty());
+}
+
+TEST(AndroidImportTransfer, ASizelessSourceFromAProviderNeverResumesFromAStrangerSTemporary) {
+    // the provider does not say how big the file is, and 5000 bytes of *something* are on disk.
+    // Resuming would ask it to skip past bytes it may never have sent, and the truncated result
+    // would be reported Complete, because a sizeless stream's end is its only completion signal.
+    const TransferPlan plan = planTransfer("song.mp3", 0, 5000);
+    EXPECT_TRUE(plan.discardPartial);
+    EXPECT_EQ(plan.resumeFrom, 0u);
+    const TransferStep step = transferStep(plan, 5000, 1u << 30, 0, 4096);
+    EXPECT_EQ(step.skipBytes, 0u) << "nothing is skipped: the bytes are not known to belong to this file";
+    EXPECT_NE(step.message.find("does not say how big"), std::string::npos) << step.message;
+}
+
+TEST(AndroidImageLimits, ADownscaleMessageDoesNotSayZeroMegabytes) {
+    // "(0 MB decoded)" on a 3x3 icon reads like a bug report rather than an answer
+    ImageBudget budget;
+    budget.maxTextureSize = 1;
+    ImageSize tiny;
+    tiny.known = true;
+    tiny.width = 3;
+    tiny.height = 3;
+    tiny.channels = 4;
+    const ImageDecision decision = decideImageImport(tiny, budget);
+    EXPECT_EQ(decision.verdict, ImageVerdict::Downscale);
+    EXPECT_EQ(decision.message.find("MB decoded"), std::string::npos) << decision.message;
+    EXPECT_NE(decision.message.find("the image is 3x3"), std::string::npos) << decision.message;
+
+    // and a big one still says its size
+    ImageSize big;
+    big.known = true;
+    big.width = 8000;
+    big.height = 6000;
+    big.channels = 4;
+    ImageBudget roomy;
+    roomy.maxTextureSize = 4096;
+    EXPECT_NE(decideImageImport(big, roomy).message.find("MB decoded"), std::string::npos);
 }

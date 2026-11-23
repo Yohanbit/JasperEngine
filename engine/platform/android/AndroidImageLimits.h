@@ -297,9 +297,12 @@ namespace jasperengine::android {
             decision.scale = 1.0 / (double)(1 << halvings);
             decision.width = width;
             decision.height = height;
+            // the decoded size in MB only when it is one: "(0 MB decoded)" on a 3x3 icon is noise
+            // that makes the sentence read like a bug report rather than an answer
+            const uint64_t megabytes = size.decodedBytes() / (1024ull * 1024ull);
             decision.message = "the image is " + std::to_string(size.width) + "x" + std::to_string(size.height) +
-                               " (" + std::to_string(size.decodedBytes() / (1024ull * 1024ull)) + " MB decoded); it is imported at " +
-                               std::to_string(width) + "x" + std::to_string(height);
+                               (megabytes > 0 ? " (" + std::to_string(megabytes) + " MB decoded)" : std::string()) +
+                               "; it is imported at " + std::to_string(width) + "x" + std::to_string(height);
             return decision;
         }
 

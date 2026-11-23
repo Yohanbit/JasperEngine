@@ -67,12 +67,21 @@ namespace jasperengine::android {
     // is project-relative with '/' separators. False when the path leaves the project (".."), which
     // is the check an import must do before it writes: a name from a provider is not trusted.
     inline bool isInsideProject(std::string_view relative) {
+        // An absolute path is not "inside" anything: "/etc/passwd" joined to a project folder is
+        // the volume's root, and on Linux/macOS a leading '/' makes a join discard the prefix
+        // outright. Android hands these over as a provider's name and a path built from one must
+        // never escape, so a leading separator is refused, as is the empty name (which joins to
+        // the folder itself, not to a file in it).
+        if (relative.empty()) return false;
+        if (relative.front() == '/') return false;
         size_t i = 0;
         while (i <= relative.size()) {
             size_t end = relative.find('/', i);
             if (end == std::string_view::npos) end = relative.size();
             const std::string_view segment = relative.substr(i, end - i);
-            if (segment == "..") return false;
+            // "." and ".." are the two names a path walker treats as navigation rather than a
+            // file, and a segment that is empty ("a//b") is a root-ish absolute on some systems
+            if (segment == ".." || segment == ".") return false;
             if (segment.find(':') != std::string_view::npos) return false;
             if (segment.find('\\') != std::string_view::npos) return false;
             i = end + 1;

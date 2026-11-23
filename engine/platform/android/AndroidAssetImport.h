@@ -107,6 +107,35 @@ namespace jasperengine::android {
     // itself, so a name that kept one would not be the name on disk), and the result is cut to
     // maxBytes without splitting a UTF-8 sequence. Unicode is kept: a phone's photos are named in
     // the user's own script. "file" when nothing is left.
+    // "CON", "NUL", "AUX", "PRN", "COM1".."COM9", "LPT1".."LPT9", with or without an extension:
+    // Windows reserves them at every folder and in every case, so "con.png" imports and plays on
+    // the phone and then cannot be created, copied or deleted on a Windows machine -- the project
+    // opens with a missing asset and nothing on the phone ever showed a problem. Android has no
+    // such names, which is exactly why the phone has to be the one that avoids making them.
+    inline bool isWindowsDeviceName(std::string_view stem) {
+        if (stem.size() < 3 || stem.size() > 4) return false;
+        char letters[4] = {0, 0, 0, 0};
+        for (size_t i = 0; i < stem.size(); i++) {
+            const char c = stem[i];
+            letters[i] = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+        }
+        const std::string_view upper(letters, stem.size());
+        if (upper == "CON" || upper == "NUL" || upper == "AUX" || upper == "PRN") return true;
+        if (stem.size() != 4) return false;
+        const std::string_view head = upper.substr(0, 3);
+        const bool digit = upper[3] >= '1' && upper[3] <= '9';
+        return digit && (head == "COM" || head == "LPT");
+    }
+
+    inline std::string avoidWindowsDeviceName(const std::string& name) {
+        const size_t dot = name.find_last_of('.');
+        const std::string_view stem = dot == std::string::npos ? std::string_view(name)
+                                                               : std::string_view(name).substr(0, dot);
+        if (!isWindowsDeviceName(stem)) return name;
+        // an underscore in front: still the same file to a reader, and no longer a device
+        return "_" + name;
+    }
+
     inline std::string sanitizeFileName(std::string_view wanted, const SanitizeOptions& options = {}) {
         std::string name;
         name.reserve(wanted.size());
@@ -184,7 +213,7 @@ namespace jasperengine::android {
             trimEnds(name);
             if (name.empty() || name == "." || name == "..") return "file";
         }
-        return name;
+        return avoidWindowsDeviceName(name);
     }
 
     // `wanted` sanitized, and then the first name free according to `isTaken`: "sprite.png",
