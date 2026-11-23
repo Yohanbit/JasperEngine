@@ -53,8 +53,18 @@ Data::~Data() {
 }
 
 unsigned int Data::read(unsigned char *aDst, unsigned int aBytes) {
-    if (offset + aBytes >= dataLength)
-        aBytes = dataLength - offset;
+    // The guard comes first, and in this order, because both of the old tests were wrong on an
+    // unsigned length: `offset + aBytes >= dataLength` overflowed when aBytes was the remaining
+    // count (so a read at the end computed `dataLength - offset` past the buffer), and nothing
+    // checked the cursor or the pointer at all -- `Data()` is null with length 0, and `seek(-4)`
+    // on it wrapped offset to 4294967292, so `dataPtr + offset` was a SEGV (reproduced under
+    // AddressSanitizer: FileData.newFile(false) -> seek(-4) -> read8(), all reachable from Lua).
+    if (dataPtr == nullptr || aDst == nullptr || aBytes == 0 || offset >= dataLength)
+        return 0;
+
+    const unsigned int available = dataLength - offset;
+    if (aBytes > available)
+        aBytes = available;
 
     memcpy(aDst, dataPtr + offset, aBytes);
     offset += aBytes;
@@ -79,12 +89,17 @@ unsigned int Data::length() {
 }
 
 void Data::seek(int aOffset) {
-    if (aOffset >= 0)
-        offset = aOffset;
-    else
-        offset = dataLength + aOffset;
-    if (offset > dataLength-1)
-        offset = dataLength-1;
+    // Signed arithmetic throughout: `dataLength + aOffset` and `dataLength - 1` are unsigned
+    // expressions, so a negative seek wrapped and the clamp against `dataLength - 1` could not
+    // catch it. The upper bound is dataLength (one past the last byte is a legal cursor: that is
+    // where a read returns 0), not dataLength - 1.
+    long long target = aOffset >= 0 ? static_cast<long long>(aOffset)
+                                    : static_cast<long long>(dataLength) + aOffset;
+    if (target < 0)
+        target = 0;
+    if (target > static_cast<long long>(dataLength))
+        target = static_cast<long long>(dataLength);
+    offset = static_cast<unsigned int>(target);
 }
 
 unsigned int Data::pos() {
