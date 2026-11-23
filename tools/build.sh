@@ -828,6 +828,12 @@ android)
     # (tools/ci/check_gradle_warnings.py; the template sets --warning-mode all)
     # The NDK app/build.gradle pins, installed before Gradle when the SDK lacks it: the Android Gradle
     # plugin's own download of it has no retry (main's run 44404218432 failed on a Premature EOF)
+    # The status is captured and reported, because the `ls` below used to be the last command: with
+    # no APK it exits 2, `set -e` aborts there, and the lane failed with `2` -- the exit status of a
+    # directory listing -- while Gradle's own error sat in gradle.log, unreadable from outside the
+    # runner. Eight CI runs were spent looking for what composed `2`. Now the Gradle failure is named
+    # and its status is the lane's.
+    build_status=0
     run bash -euo pipefail -c "
         cd engine/workspaces/androidstudio
         ndk=\$(sed -n 's/^ *ndkVersion = \"\\(.*\\)\"\$/\\1/p' app/build.gradle)
@@ -844,7 +850,17 @@ android)
         env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee /src/$APK_DIR/gradle.log
         cp app/build/outputs/apk/debug/*.apk /src/$APK_DIR/
         python3 /src/tools/ci/check_gradle_warnings.py /src/$APK_DIR/gradle.log
-    "
+    " || build_status=$?
+    if [[ $build_status -ne 0 ]]; then
+        echo "android: the build failed (status $build_status); the compiler's and Gradle's own lines are in $APK_DIR/gradle.log" >&2
+        exit "$build_status"
+    fi
+    # Gradle succeeded: there must be an APK, and its absence is a build problem, not a directory
+    # listing's. (compgen, because a failed glob expands to the pattern itself and would be listed.)
+    if ! compgen -G "$ROOT/$APK_DIR/*.apk" > /dev/null; then
+        echo "android: Gradle reported success but wrote no APK to $APK_DIR" >&2
+        exit 1
+    fi
     ls -l "$ROOT/$APK_DIR"/*.apk
     ;;
 esac

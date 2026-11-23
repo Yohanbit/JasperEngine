@@ -184,8 +184,11 @@ jobs:
           set +e
           shopt -s nullglob
 
-          logs=(build/test-results/android-build.log build/test-results/android-editor.log
-                build/android/gradle.log)
+          # gradle.log is where Gradle's own compile errors are: tools/build.sh's run block tees it
+          # there and tools/build.sh now exits with that block's status, so this log is the one that
+          # names a failing build
+          logs=(build/android/gradle.log build/test-results/android-build.log
+                build/test-results/android-editor.log)
           for log in "${logs[@]}"; do
             if [[ ! -s "$log" ]]; then
               echo "::error::[$log] missing or empty"
