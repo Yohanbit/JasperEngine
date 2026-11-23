@@ -180,7 +180,8 @@ public final class JasperBootLog {
 				{"logcat", "-d", "-v", "threadtime"}}) {
 			StringBuilder chunk = new StringBuilder(32 * 1024);
 			try {
-				Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+				// (java.lang.Process named in full: android.os.Process is imported for myPid())
+				java.lang.Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
 				try (BufferedReader reader = new BufferedReader(
 						new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
 					String line;
