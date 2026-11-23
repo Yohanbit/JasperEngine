@@ -15,6 +15,7 @@
 #include "Log.h"
 #include "util/PlatformRules.h"
 #include "util/StringUtils.h"
+#include "AndroidStorageSpaceQuery.h"
 
 #include <android/window.h>
 #include <game-activity/GameActivity.h>
@@ -217,6 +218,18 @@ std::string JasperEngineAndroid::getLuaPath() {
 
 std::string JasperEngineAndroid::getUserDataPath() {
     return NativeEngine::getInstance()->getInternalDataPath();
+}
+
+jasperengine::VolumeSpace JasperEngineAndroid::getVolumeSpace() {
+    // Where a save, a screenshot or an imported asset lands. statfs, not statvfs: Bionic has no
+    // statvfs, and this is the same call Android's own StatFs class wraps.
+    const android::SpaceInfo info = android::querySpace(getUserDataPath());
+    jasperengine::VolumeSpace space;
+    space.known = info.known;
+    space.totalBytes = info.totalBytes;
+    space.availableBytes = info.availableBytes;
+    space.reservedBytes = info.reservedBytes;
+    return space;
 }
 
 FILE* JasperEngineAndroid::platformFopen(const char* fname, const char* mode) {

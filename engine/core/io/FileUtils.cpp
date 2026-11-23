@@ -195,6 +195,16 @@ namespace {
             reason = "is a folder";
             return false;
         }
+        // Asked before the temporary file is written, not after the rename fails: a phone that is
+        // full would otherwise write the whole temporary, hit ENOSPC on the flush and leave the
+        // folder holding a temporary nobody asked for (and the player with "no space left on the
+        // device" as the only symptom). Unknown space is never a refusal -- every desktop platform
+        // leaves getVolumeSpace() at its default -- so this changes nothing off Android.
+        const VolumeSpace space = System::instance().getVolumeSpace();
+        if (!space.allowsWrite(bytes.size())){
+            reason = "not enough free space (a save keeps 8 MB free)";
+            return false;
+        }
         const io::WriteResult written = io::writeFileAtomic(target, bytes);
         if (!written.ok()){
             reason = written.code ? reasonOf(written.code) : written.message;

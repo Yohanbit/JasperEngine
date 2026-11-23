@@ -25,6 +25,9 @@ public:
     virtual void quit() override;
 
     virtual std::string getUserDataPath() override;
+    // statfs of the user data directory (AndroidStorageSpaceQuery.h), in the core's own shape so
+    // System.h needs no Android header. Unknown when the call fails: never a refusal.
+    virtual jasperengine::VolumeSpace getVolumeSpace() override;
     // a prebuilt player's content (game/ of the APK's assets, S30); else the assets root
     virtual std::string getAssetPath() override;
     virtual std::string getLuaPath() override;

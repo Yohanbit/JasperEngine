@@ -197,6 +197,31 @@ namespace jasperengine {
         bool operator!=(const FramePacing& other) const { return !(*this == other); }
     };
 
+    // Bytes of the volume that holds a folder, as a platform reports them. `known == false` means
+    // the platform did not answer, which every consumer must read as "no information", never as
+    // "no space".
+    struct JASPERENGINE_API VolumeSpace {
+        bool known = false;
+        uint64_t totalBytes = 0;
+        // free to this app (Android's statfs f_bavail: what a write may actually use)
+        uint64_t availableBytes = 0;
+        // free but held back for the system
+        uint64_t reservedBytes = 0;
+
+        // Whether a write of `bytes` may be attempted, keeping `reserve` bytes free for everything
+        // else on the phone. Unknown: allowed, because no reading must never stop a save.
+        //
+        // This is the same rule platform/android/AndroidStorageSpace.h's allowWrite applies to a
+        // SpaceInfo; it is repeated here in the core's own type because the io layer may not
+        // include an Android header, and it is the one line that has to be right rather than the
+        // whole policy (a write is refused only when the volume is genuinely too small).
+        bool allowsWrite(uint64_t bytes, uint64_t reserve = 8u * 1024u * 1024u) const {
+            if (!known) return true;
+            const uint64_t needed = bytes > UINT64_MAX - reserve ? UINT64_MAX : bytes + reserve;
+            return availableBytes >= needed;
+        }
+    };
+
     class JASPERENGINE_API System {
     private:
 
@@ -373,6 +398,13 @@ namespace jasperengine {
         // Data the engine can rebuild (the runtime shader cache): the user data directory,
         // except on Apple platforms, which keep caches apart from what the user saves
         virtual std::string getCachePath();
+        // Free space where a save, a screenshot or an imported asset is about to be written.
+        // The policy is platform/android/AndroidStorageSpace.h (allowWrite); this is the reading it
+        // needs, in a shape every platform can fill: Android statfs, Apple the volume's available
+        // capacity, Windows GetDiskFreeSpaceEx. Default: unknown, which the policy treats as "never
+        // refuse" -- so a platform that does not implement it behaves exactly as before.
+        virtual VolumeSpace getVolumeSpace();
+
         // Where a game's crash and hang reports go (diag/CrashHandler.h): <user data>/crash
         // (Android: the internal files dir; iOS: Library/Caches/crash). Empty: no reports (the
         // web, whose crashes the page hooks report, and the unit tests)

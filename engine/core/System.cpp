@@ -332,6 +332,12 @@ std::string System::getCachePath(){
     return getUserDataPath();
 }
 
+VolumeSpace System::getVolumeSpace(){
+    // Unknown, not zero: a platform that does not answer must never be read as "no space left".
+    // Android overrides this (JasperEngineAndroid::getVolumeSpace, via statfs).
+    return VolumeSpace();
+}
+
 std::string System::getCrashReportPath(){
     const std::string userData = getUserDataPath();
     return userData.empty() ? std::string() : userData + "/crash";
