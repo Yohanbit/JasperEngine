@@ -99,6 +99,20 @@ with no device to run it on.
 - A `.gltf` picked with only some of its files now names the ones that are not there
   (`PreflightInput::companionNames` → `absentSidecars`, matched on the leaf). 2 cases, 77 total.
 
+### An audit of this branch's own code: four defects, two gates (`0f252bfa`, `f3cb5205`, `ba659cc9`)
+
+- `isInsideProject` accepted `"/etc/passwd"`, `""`, `"."` and `"a/./b"` (bug 10p).
+- `sanitizeFileName` accepted Windows device names, which break the project on a Windows machine and
+  never on the phone (10q).
+- `planTransfer` resumed a **sizeless** provider's copy from a temporary that might be another file's,
+  and reported the truncated result Complete (10r) -- the worst of the four.
+- A downscale message said "0 MB decoded" (10s).
+- `tools/android/selfcheck.cpp`: seven invariants in one program, no CMake. Verified by mutation --
+  and its first version did *not* catch bug 10j, which is recorded in the file.
+- `tools/android/data-io-overflow-repro.cpp`: the core `Data::seek`/`read` defects with the patch
+  beside them, runnable (`A` aborts under ASan). The audit found a **second** core defect the earlier
+  report missed: `read()` at the end returns the buffer's first byte instead of 0 (10b-ii).
+
 ## Still not done
 
 - Nothing here has run on a phone, an emulator or an APK: no SDK, no NDK, no `javac`, no Docker in

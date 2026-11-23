@@ -26,7 +26,12 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidImportTransfer` | same | the temporary's shape and mapping, resume, an already-complete partial, a partial longer than its source, a full volume, interrupted vs cancelled, a provider with no size, retry-of-a-retry | 10 |
 
-Total: **77 cases, 77 pass, 0 skipped, 0 disabled.**
+Total: **80 cases, 80 pass, 0 skipped, 0 disabled.**
+
+Plus `tools/android/selfcheck.cpp`: seven property checks across the eight headers, run with one
+compiler invocation and no build system. Verified by mutation (reintroducing bug 10j and the
+`isInsideProject` bug makes it fail), and its own first version did not catch 10j -- recorded in the
+file's header, because a gate that has never failed is a decoration.
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -180,8 +185,9 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 77 tests from 9 test suites ran. (0 ms total)
-[  PASSED  ] 77 tests.
+[==========] 80 tests from 9 test suites ran. (0 ms total)
+[  PASSED  ] 80 tests.
+selfcheck: every invariant holds
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is

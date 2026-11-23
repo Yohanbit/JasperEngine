@@ -47,6 +47,7 @@ headers added here follow it exactly, which also means:
 
 | # | Question | Answer (evidence) | Label |
 | --- | --- | --- | --- |
+| 0g | Which of my own properties had no check? | Every defect this branch shipped was a property that held for the cases I thought of: a name escaping its folder, a read past its buffer, a recovery name that does not map back, a guard closing early. The suite is case-by-case; nothing checked the properties | verified (each one, once written, failed under a deliberate mutation) |
 | 0f | Is a per-file verdict enough to predict a phone's failure? | No: the common failure is the sum. 20 atlases at 2048x2048 are each inside every limit and 320 MiB resident together, which a mid-range GPU heap does not have; the project loads on a desktop and dies in the level load with no file to blame | verified (test + tool on a 20-atlas folder) |
 | 0e | How is the pre-flight run? | Nothing in the repo runs a C++ tool over a project folder, so the checks existed only for whoever compiled the test suite. `tools/` is Python-only. Answer: a Python driver with a generated C++ builder over the real headers, so the verdicts cannot drift | verified (built and run) |
 | 0d-ii | What happens to two models that both ship `textures/common.png`? | One overwrote the other, silently: a flat import folder cannot hold both, and nothing named the collision, so one model rendered with the other's texture. Flattening also left the `.gltf` naming a `textures/` folder the import never made | verified (test + tool on a two-model folder) |
@@ -66,7 +67,7 @@ headers added here follow it exactly, which also means:
 ## 3. Implemented (this branch)
 
 All nine (eight headers) are free of Android headers, no new build wiring, C++20,
-`-Wall -Wextra -Werror` clean on GCC 12, and **77 gtest cases passing**. A runnable tool exposes the
+`-Wall -Wextra -Werror` clean on GCC 12, and **80 gtest cases passing**, plus `tools/android/selfcheck.cpp` (seven invariants, no CMake needed). A runnable tool exposes the
 whole thing: `tools/android-asset-report.py <project>`. Every header is included
 twice by the suite on purpose (see bug 10d). See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
