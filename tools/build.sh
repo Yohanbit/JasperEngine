@@ -839,7 +839,8 @@ android)
     run bash -euo pipefail -c 'echo "android: running in $(uname -a), ANDROID_HOME=${ANDROID_HOME:-unset}, workspace=$(pwd)";
         test -x engine/workspaces/androidstudio/gradlew || { echo "android: gradlew is missing in the container" >&2; exit 4; }'
     run bash -euo pipefail -c "
-        cd engine/workspaces/androidstudio
+        echo 'android: gradle block started'
+        cd engine/workspaces/androidstudio || { echo 'android: no androidstudio workspace in the container' >&2; exit 5; }
         ndk=\$(sed -n 's/^ *ndkVersion = \"\\(.*\\)\"\$/\\1/p' app/build.gradle)
         [[ -n \"\$ndk\" ]] || { echo 'no ndkVersion in app/build.gradle' >&2; exit 1; }
         if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
@@ -854,8 +855,11 @@ android)
         # Made here, in the container, immediately before it is written to: the host's mkdir runs
         # before the container starts, and the block failing with "no such file or directory" from
         # tee is a failure nobody can read.
-        mkdir -p "/src/$APK_DIR"
+        mkdir -p "/src/$APK_DIR" || { echo "android: cannot make /src/$APK_DIR" >&2; exit 6; }
+        echo 'android: running gradlew'
         env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
+        gradle_status=${PIPESTATUS[0]}
+        [[ $gradle_status -eq 0 ]] || { echo "android: gradlew exited $gradle_status" >&2; exit "$gradle_status"; }
         # the globs are not compgen here (this is a real shell with real files): a failed one must
         # say so, and not be handed to cp as a literal name
         ls /src/$APK_DIR/gradle.log
