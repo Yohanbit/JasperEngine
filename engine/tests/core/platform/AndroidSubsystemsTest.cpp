@@ -9,6 +9,8 @@
 #include "AndroidProjectLayout.h"
 #include "AndroidStorageSpace.h"
 #include "AndroidTouchGestures.h"
+#include "AndroidImageOrientation.h"
+#include "AndroidImportPreflight.h"
 #include "asset/AssetType.h"
 
 #include <gtest/gtest.h>
@@ -523,8 +525,6 @@ TEST(AndroidProjectLayout, RecognizesProjectCachesAndTheImportFolder) {
 
 // ---- image limits
 
-#include "AndroidImageLimits.h"
-
 namespace {
 
     // a PNG header with the given size and colour type (6: RGBA)
@@ -938,4 +938,106 @@ TEST(AndroidImageOrientation, ARotatedPhotoReportsSwappedDimensions) {
     const OrientedSize turned = orientedSize(4000, 3000, Orientation::Rotate180);
     EXPECT_EQ(turned.width, 4000);
     EXPECT_EQ(turned.height, 3000);
+}
+
+TEST(AndroidImportPreflight, APortraitPhotoSaysHowItIsTurnedAndHowBigADecodeIs) {
+    PreflightInput photo;
+    photo.fileName = "DCIM/IMG_4821.JPG";
+    photo.prefix = jpegWithOrientation(6);
+    const PreflightFinding finding = preflightOne(photo, PreflightOptions{});
+    EXPECT_EQ(finding.type, AssetType::Texture);
+    EXPECT_EQ(finding.assetName, "img_4821.jpg") << "the name is what the import calls it, not what the camera did";
+    EXPECT_EQ(finding.orientation, 6u);
+    EXPECT_EQ(finding.severity, PreflightSeverity::Note);
+    EXPECT_NE(finding.message.find("turned 90 clockwise"), std::string::npos) << finding.message;
+    EXPECT_NE(finding.message.find("turned upright on import"), std::string::npos) << finding.message;
+}
+
+TEST(AndroidImportPreflight, AWebpIsBrokenWithoutThePlatformDecoderAndANoteWithIt) {
+    const std::vector<uint8_t> webp = {'R', 'I', 'F', 'F', 36, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '};
+    PreflightInput file;
+    file.fileName = "UI/icon.webp";
+    file.prefix = webp;
+
+    // no platform decoder: the editor accepted the extension, the engine has no decoder
+    const PreflightFinding without = preflightOne(file, PreflightOptions{});
+    EXPECT_EQ(without.severity, PreflightSeverity::Broken);
+    EXPECT_NE(without.message.find("WebP"), std::string::npos) << without.message;
+
+    // BitmapFactory converts it, so it draws, at the cost of a conversion on import
+    PreflightOptions bitmap;
+    bitmap.androidBitmapFactory = true;
+    const PreflightFinding with = preflightOne(file, bitmap);
+    EXPECT_EQ(with.severity, PreflightSeverity::Note);
+    EXPECT_NE(with.message.find("converted to png"), std::string::npos) << with.message;
+}
+
+TEST(AndroidImportPreflight, AHugePhotoIsReducedAndOnePastEveryLimitIsRefused) {
+    PreflightOptions options;
+    options.budget.maxTextureSize = 4096;
+    options.budget.decodedBytesLimit = 0;
+
+    // 8000x6000 is over 4096 on both sides: 1/2 each side is 4000x3000, which fits
+    PreflightInput big;
+    big.fileName = "art/backdrop.png";
+    big.prefix = pngHeader(8000, 6000, 6);
+    const PreflightFinding reduced = preflightOne(big, options);
+    EXPECT_EQ(reduced.severity, PreflightSeverity::Note);
+    EXPECT_DOUBLE_EQ(reduced.scale, 0.5);
+    EXPECT_EQ(reduced.importedWidth, 4000);
+    EXPECT_EQ(reduced.importedHeight, 3000);
+    EXPECT_NE(reduced.message.find("reduced from 8000x6000 to 4000x3000"), std::string::npos) << reduced.message;
+    // 8000x6000 at the PNG's 3 channels is 183.1 MB: a phone cannot do that next to its own
+    // textures, and the report says so in the units a person acts on
+    EXPECT_NE(reduced.message.find("183.1 MB"), std::string::npos) << reduced.message;
+
+    // past the format's own ceiling: refused, and the reason says so instead of "it did not load"
+    PreflightInput absurd;
+    absurd.fileName = "art/scan.png";
+    absurd.prefix = pngHeader(20000, 20000, 6);
+    const PreflightFinding refused = preflightOne(absurd, options);
+    EXPECT_EQ(refused.severity, PreflightSeverity::Broken);
+    EXPECT_NE(refused.message.find("20000x20000"), std::string::npos) << refused.message;
+}
+
+TEST(AndroidImportPreflight, ASecondFileWithTheSameNameIsReportedUnderTheNameItGets) {
+    std::vector<std::string> taken = {"icon.png"};
+    PreflightOptions options;
+    options.takenNames = &taken;
+
+    PreflightInput second;
+    second.fileName = "downloads/Icon.PNG";
+    second.prefix = pngHeader(64, 64, 6);
+    const PreflightFinding finding = preflightOne(second, options);
+    EXPECT_EQ(finding.assetName, "icon (1).png") << "the report names the collision's outcome, not its input";
+}
+
+TEST(AndroidImportPreflight, TheWholeProjectGetsOneLineThatNamesTheFirstThingToFix) {
+    std::vector<PreflightInput> files(4);
+    files[0].fileName = "art/photo.jpg";
+    files[0].prefix = jpegWithOrientation(1);
+    files[1].fileName = "art/huge.png";
+    files[1].prefix = pngHeader(8000, 6000, 6);
+    files[2].fileName = "ui/broken.webp";
+    files[2].prefix = {'R', 'I', 'F', 'F', 36, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '};
+    files[3].fileName = "audio/song.mp3";
+    files[3].prefix = {'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0};
+
+    const PreflightReport report = preflightImports(files, PreflightOptions{});
+    EXPECT_EQ(report.findings.size(), 4u);
+    EXPECT_EQ(report.broken, 1);
+    EXPECT_NE(report.summary.find("broken.webp"), std::string::npos) << report.summary;
+    EXPECT_EQ(report.findings[0].severity, PreflightSeverity::Fine) << "an upright photo with no limit hit is not a note";
+    EXPECT_EQ(report.findings[3].severity, PreflightSeverity::Fine) << "an mp3 is what the engine plays";
+    EXPECT_GT(report.largestDecodedBytes, 0u);
+}
+
+TEST(AndroidImportPreflight, AFileThatIsNotAnAssetIsCopiedAndNotReportedAsBroken) {
+    PreflightInput notes;
+    notes.fileName = "docs/readme.md";
+    notes.prefix = {'#', ' ', 'h', 'i'};
+    const PreflightFinding finding = preflightOne(notes, PreflightOptions{});
+    EXPECT_EQ(finding.type, AssetType::Unknown);
+    EXPECT_EQ(finding.severity, PreflightSeverity::Fine);
+    EXPECT_EQ(finding.message, "not an asset type this engine imports; it is copied as it is");
 }

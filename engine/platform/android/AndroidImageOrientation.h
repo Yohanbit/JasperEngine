@@ -74,6 +74,21 @@ namespace jasperengine::android {
         return orientation == Orientation::Normal || orientation == Orientation::Unknown;
     }
 
+    // What a tag is, in the words a report uses for it: "upright", "turned 90 clockwise", ...
+    inline const char* orientationName(Orientation orientation) {
+        switch (orientation) {
+            case Orientation::Normal: return "upright";
+            case Orientation::MirrorHorizontal: return "mirrored left to right";
+            case Orientation::Rotate180: return "upside down";
+            case Orientation::MirrorVertical: return "mirrored top to bottom";
+            case Orientation::Transpose: return "transposed";
+            case Orientation::Rotate90: return "turned 90 clockwise";
+            case Orientation::Transverse: return "turned 90 clockwise and mirrored";
+            case Orientation::Rotate270: return "turned 90 counter-clockwise";
+            default: return "with no tag";
+        }
+    }
+
     // The transform for a tag. A mirrored rotation is expressed as one flip and one rotation, which
     // is what a resampler can do in a single pass (Transpose/Transverse are a rotation plus a flip).
     inline OrientationTransform transformFor(Orientation orientation) {

@@ -312,8 +312,6 @@ namespace jasperengine::android {
 
 }
 
-#endif // ANDROID_IMAGE_LIMITS_H
-
 // ---- what this engine can actually decode
 //
 // The engine decodes a texture through the vendored stb_image (engine/core/texture/TextureData.cpp,
@@ -411,3 +409,5 @@ namespace jasperengine::android {
     }
 
 }
+
+#endif // ANDROID_IMAGE_LIMITS_H
