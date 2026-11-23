@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JasperBootLog's share sheet (debug builds write Downloads/jasperengine-boot.txt): the app's own
+     external files directory, exposed so files can be attached to an email or Drive. -->
+<paths>
+    <external-files-path name="boot-log" path="." />
+</paths>
