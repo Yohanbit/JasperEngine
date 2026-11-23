@@ -1516,3 +1516,41 @@ TEST(AndroidModelSidecars, TheModelNamePrefixIsALegalAssetName) {
     EXPECT_EQ(name, "_12_head_body_my_skin_1.png") << name;
     expectLegalName(name);
 }
+
+TEST(AndroidImportPreflight, AGlbBroughtWithOnlyHalfItsFilesSaysWhichAreMissing) {
+    const std::string gltf = R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Body.bin"}],
+        "images":[{"uri":"textures/skin.png"},{"uri":"textures/eyes.png"}]})";
+    PreflightInput file;
+    file.fileName = "Body.gltf";
+    file.prefix.assign(gltf.begin(), gltf.end());
+    // the picker brought the buffer and one texture, and reports leaves while the glTF writes paths
+    file.companionNames = {"Body.bin", "skin.png"};
+    const PreflightFinding finding = preflightOne(file, PreflightOptions{});
+    ASSERT_EQ(finding.absentSidecars.size(), 1u);
+    EXPECT_EQ(finding.absentSidecars[0], "textures/eyes.png");
+    EXPECT_NE(finding.message.find("not brought with it: textures/eyes.png"), std::string::npos)
+        << finding.message;
+    // it still imports and shows what it has: a Note, not a Broken
+    EXPECT_EQ(finding.severity, PreflightSeverity::Note);
+
+    // everything brought: no claim to make
+    PreflightInput complete = file;
+    complete.companionNames = {"Body.bin", "skin.png", "eyes.png"};
+    EXPECT_TRUE(preflightOne(complete, PreflightOptions{}).absentSidecars.empty());
+
+    // and a caller that passes no companions makes no claim at all (it cannot know)
+    PreflightInput blind;
+    blind.fileName = "Body.gltf";
+    blind.prefix = file.prefix;
+    EXPECT_TRUE(preflightOne(blind, PreflightOptions{}).absentSidecars.empty());
+}
+
+TEST(AndroidImportPreflight, ACompanionWithAFolderInItsNameStillMatchesItsLeaf) {
+    // some pickers report "Body.bin" and some a relative path of their own
+    const std::string gltf = R"({"asset":{"version":"2.0"},"buffers":[{"uri":"bin/Body.bin"}]})";
+    PreflightInput file;
+    file.fileName = "Body.gltf";
+    file.prefix.assign(gltf.begin(), gltf.end());
+    file.companionNames = {"downloads/Body.bin"};
+    EXPECT_TRUE(preflightOne(file, PreflightOptions{}).absentSidecars.empty());
+}

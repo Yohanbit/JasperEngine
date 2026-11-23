@@ -67,6 +67,10 @@ namespace jasperengine::android {
         std::string fileName;
         std::vector<uint8_t> prefix;
         uint64_t fileBytes = 0;
+        // for a .gltf only: the files the user brought with it in the same pick, by the name the
+        // picker gave them (no folder: a phone has none). A model whose sidecars are not all here
+        // loads with missing geometry and nothing else would say so
+        std::vector<std::string> companionNames;
     };
 
     struct PreflightFinding {
@@ -90,6 +94,9 @@ namespace jasperengine::android {
         // and the name each of them lands under once the import flattens the folder: the caller
         // asks for that file and writes it under this name (a two-model project cannot collide)
         std::vector<std::string> sidecarAssetNames;
+        // the sidecars the .gltf names that the same pick did not bring (empty when all arrived,
+        // or when the caller passed no companionNames and so made no claim)
+        std::vector<std::string> absentSidecars;
         // the image is reduced to this scale of each side (1.0 when it is not)
         double scale = 1.0;
     };
@@ -278,7 +285,32 @@ namespace jasperengine::android {
                 for (const SidecarImport& sidecar : import.sidecars) {
                     finding.sidecarAssetNames.push_back(sidecar.assetName);
                 }
-                const std::string sentence = sidecarSentence(sidecars);
+                // and which of them the user did not bring: matched on the leaf name, because the
+                // glTF writes a path ("textures/skin.png") and a phone's picker reports a leaf
+                if (import.parsed && !input.companionNames.empty()) {
+                    for (const SidecarImport& sidecar : import.sidecars) {
+                        if (sidecar.uri.empty()) continue;
+                        const std::string wanted = detail::sidecarFileName(sidecar.uri);
+                        bool found = false;
+                        for (const std::string& brought : input.companionNames) {
+                            if (detail::sidecarFileName(brought) == wanted) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) finding.absentSidecars.push_back(sidecar.uri);
+                    }
+                }
+                std::string sentence = sidecarSentence(sidecars);
+                if (!finding.absentSidecars.empty()) {
+                    // severity stays a Note: the model imports and shows what it can, but the user
+                    // asked for a complete model and did not get one
+                    std::string absent = "not brought with it: ";
+                    for (size_t i = 0; i < finding.absentSidecars.size(); i++) {
+                        absent += (i ? ", " : "") + finding.absentSidecars[i];
+                    }
+                    sentence = sentence.empty() ? absent : sentence + "; " + absent;
+                }
                 if (!sentence.empty()) {
                     finding.severity = sidecars.parsed ? PreflightSeverity::Note : PreflightSeverity::Broken;
                     finding.message = sentence;
