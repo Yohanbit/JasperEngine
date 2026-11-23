@@ -194,22 +194,20 @@ jobs:
               echo "::error::[$log] missing or empty"
               continue
             fi
-            # the errors first: they are what a build is fixed by
-            while IFS= read -r line; do
-              [[ -z "$line" ]] && continue
-              printf '::error::[%s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-            done < <(grep -aE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|^\$ |usage:|invalid|cannot|No such|not found|SKIPPED|Execution failed" "$log" 2>/dev/null | head -n 40)
-
-            # the command line logged.sh recorded, so the annotation says what actually ran
-            head -n 1 "$log" 2>/dev/null | while IFS= read -r line; do
-              printf '::error::[%s first] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-            done
-
-            # and the tail, always: the last lines say why even when the pattern above misses it
+            # THE TAIL FIRST. GitHub keeps about ten annotations per step and drops the rest
+            # silently, so whatever is emitted last is what nobody sees -- and the last lines of a
+            # build log are the ones that say why. (Emitting the pattern matches first meant a run
+            # whose log ended mid-startup showed only `+ [[ android == android ]]`.)
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               printf '::error::[%s …] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-            done < <(tail -n 60 "$log")
+            done < <(tail -n 12 "$log")
+
+            # then the errors the patterns name, which is what a build is usually fixed by
+            while IFS= read -r line; do
+              [[ -z "$line" ]] && continue
+              printf '::error::[%s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+            done < <(grep -aE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|usage:|No such file" "$log" 2>/dev/null | tail -n 8)
           done
 
           echo "::error::exit codes: APK step failed; logs were: $(ls -la build/test-results 2>/dev/null | tr '\n' ' ')"

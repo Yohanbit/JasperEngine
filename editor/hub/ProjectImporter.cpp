@@ -9,6 +9,9 @@
 #include "hub/ProjectImporter.h"
 
 #include "hub/HubPaths.h"
+#if defined(__ANDROID__)
+#include "AndroidImportPreflight.h"
+#endif
 #include "System.h"
 #include "hub/StagingFolders.h"
 #include "vcs/ProcessExec.h"
@@ -125,6 +128,46 @@ bool importer::extractZip(const fs::path& zip, const fs::path& destination, cons
             return false;
         }
     }
+#if defined(__ANDROID__)
+    // The device's own report on what it is about to receive, before a byte is written: an image
+    // larger than the phone's texture budget, an audio container only MediaCodec can play, a .gltf
+    // whose sidecars are not all in the archive. The rules and their sentences are
+    // platform/android/AndroidImportPreflight.h; this is the part that has the archive open.
+    //
+    // A note, never a refusal: the file still imports, and what it will do on this device is what the
+    // user needs to know (on a phone, "this photo is 48 MP and will be downscaled to 4096" is worth
+    // more than a rejected import). The report goes to the import log, which the hub shows.
+    {
+        std::vector<android::PreflightInput> inputs;
+        inputs.reserve(count);
+        for (mz_uint i = 0; i < count; i++) {
+            const mz_zip_archive_file_stat& stat = stats[i];
+            if (stat.m_is_directory) continue;
+            android::PreflightInput input;
+            input.fileName = utf8Path(stat.m_filename);
+            input.fileBytes = stat.m_uncomp_size;
+            // the header the engine sniffs: enough for a PNG IHDR, a JPEG's first frame, a RIFF/WAVE
+            // header, or a glTF's first chunk
+            std::vector<uint8_t> prefix(std::min<uint64_t>(stat.m_uncomp_size, 4096));
+            if (!prefix.empty())
+                mz_zip_reader_extract_to_mem(&z.archive, i, prefix.data(), prefix.size(), 0);
+            input.prefix = std::move(prefix);
+            inputs.push_back(std::move(input));
+        }
+        android::PreflightOptions options;
+        options.androidBitmapFactory = true;
+        options.androidMediaCodec = true;
+        const android::PreflightReport report = android::preflightImports(inputs, options);
+        for (const android::PreflightFinding& finding : report.findings) {
+            if (finding.severity == android::PreflightSeverity::Fine || finding.message.empty()) continue;
+            if (progress) progress(-1.0f, finding.assetName + ": " + finding.message);
+        }
+        if (report.overResidentBudget && progress) {
+            progress(-1.0f, "the textures in this project need more memory than this device has for them");
+        }
+    }
+#endif
+
     fs::create_directories(destination, ec);
     if (ec) {
         error = "cannot create " + destination.string() + ": " + ec.message();
