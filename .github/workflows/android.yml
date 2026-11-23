@@ -107,11 +107,13 @@ jobs:
             # shellcheck disable=SC2016
             /src/tools/ci/retry.sh bash -c "sdkmanager --install 'ndk;$ndk' > /dev/null && test -f '$ANDROID_HOME/ndk/$ndk/source.properties'"
           fi
-          mkdir -p ../../../build/test-results
-          CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee ../../../build/test-results/android-editor.log
+          # absolute: this step cd's, and a relative redirect would land elsewhere or fail
+          log="$GITHUB_WORKSPACE/build/test-results/android-editor.log"
+          mkdir -p "$GITHUB_WORKSPACE/build/test-results" "$GITHUB_WORKSPACE/build/android"
+          CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           apk=editor/build/outputs/apk/debug/editor-debug.apk
-          if [[ -f $apk ]]; then cp "$apk" ../../../build/android/jasperengine-editor.apk; fi
+          if [[ -f $apk ]]; then cp "$apk" "$GITHUB_WORKSPACE/build/android/jasperengine-editor.apk"; fi
           exit $status
 
       # The run's logs and artifacts cannot be read from a session outside this repository's own
@@ -125,55 +127,30 @@ jobs:
           # a pull_request event carries it; a dispatch has to be told which PR is open
           PR_NUMBER: ${{ github.event.pull_request.number || '1' }}
         run: |
-          # Each logged.sh step overwrites build/test-results/<its own name>.log, so the APK step's
-          # real output is in the build directory it wrote into, not in the log that survived.
+          ls -la build/ build/android build/test-results 2>/dev/null || true
           logs=(
+            build/test-results/android-editor.log
             build/android/gradle.log
             build/test-results/android-build.log
-            build/test-results/android-editor.log
           )
-          found=0
-          for log in "${logs[@]}"; do
-            [[ -f $log ]] || continue
-            found=1
-            echo "::group::$log"
-            # the build system's own errors first: that is what a build is fixed by
-            grep -nE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:" "$log" \
-              | head -n 40 | while IFS= read -r line; do
-                printf '::error::%s\n' "${line//'%'/%25}"
-              done
-            echo "::endgroup::"
-            echo "--- last 60 lines of $log ---"
-            tail -n 60 "$log"
-          done
-          if [[ $found -eq 0 ]]; then
-            echo "::error::the Android build failed and wrote no log to annotate"
-            ls -la build/android build/test-results 2>/dev/null || true
-          fi
-
-          # The run's logs and artifacts cannot be downloaded from outside this runner, but a PR
-          # comment can be read from anywhere. Only the compiler's own lines and the build's
-          # summary go in, so the comment stays useful rather than being the whole log.
-          if [[ -n ${PR_NUMBER:-} ]]; then
-            {
-              echo "<!-- android-build-errors -->"
-              printf 'Android build failed on `%s`.\n\n' "${GITHUB_SHA:0:8}"
-              for log in "${logs[@]}"; do
-                [[ -f $log ]] || continue
-                printf '<details><summary><code>%s</code></summary>\n\n```\n' "$log"
-                # from the first failure marker to the end: Gradle puts the reason below the
-                # marker, so filtering only matching lines hides what it says
-                start=$(grep -nE "^\* What went wrong|^FAILURE:" "$log" | head -1 | cut -d: -f1)
-                if [[ -n $start ]]; then
-                  sed -n "${start},\$p" "$log" | head -n 60
-                else
-                  grep -nE "^e: |error:|fatal error:|CMake Error|undefined reference|ninja: build stopped|symbol:|location:" "$log" | head -n 40
-                fi
-                printf '```\n</details>\n\n'
-              done
-            } > build/errors.md
-            gh pr comment "$PR_NUMBER" --body-file build/errors.md || true
-          fi
+          {
+            echo "<!-- android-build-errors -->"
+            printf 'Android build failed on `%s`.\n\n' "${GITHUB_SHA:0:8}"
+            for log in "${logs[@]}"; do
+              [[ -f $log ]] || { printf '_(no `%s`)_\n\n' "$log"; continue; }
+              printf '<details><summary><code>%s</code> (%s bytes)</summary>\n\n```\n' "$log" "$(wc -c <"$log")"
+              # From the first failure marker if there is one: Gradle puts the reason below it
+              start=$(grep -nE "^\* What went wrong|^FAILURE:|^\* Where:|cmake_error" "$log" | head -1 | cut -d: -f1)
+              if [[ -n $start ]]; then
+                sed -n "${start},\$p" "$log" | head -n 50
+              fi
+              echo "--- last 40 lines ---"
+              tail -n 40 "$log"
+              printf '```\n</details>\n\n'
+            done
+          } > build/errors.md
+          echo "::error::the Android build failed: see the PR comment (android-build-errors)"
+          gh pr comment "$PR_NUMBER" --body-file build/errors.md || echo "::warning::could not comment on PR $PR_NUMBER"
           exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
