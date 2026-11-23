@@ -120,16 +120,31 @@ jobs:
       - name: Annotate the build errors
         if: failure()
         run: |
-          for log in build/test-results/android-build.log build/test-results/android-editor.log; do
+          # Each logged.sh step overwrites build/test-results/<its own name>.log, so the APK step's
+          # real output is in the build directory it wrote into, not in the log that survived.
+          logs=(
+            build/android/gradle.log
+            build/test-results/android-build.log
+            build/test-results/android-editor.log
+          )
+          found=0
+          for log in "${logs[@]}"; do
             [[ -f $log ]] || continue
-            echo "::group::the errors of $log"
-            grep -E "error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong" "$log" \
+            found=1
+            echo "::group::$log"
+            # the build system's own errors first: that is what a build is fixed by
+            grep -nE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:" "$log" \
               | head -n 10 | while IFS= read -r line; do
                 printf '::error::%s\n' "${line//'%'/%25}"
               done
             echo "::endgroup::"
-            tail -n 40 "$log"
+            echo "--- last 60 lines of $log ---"
+            tail -n 60 "$log"
           done
+          if [[ $found -eq 0 ]]; then
+            echo "::error::the Android build failed and wrote no log to annotate"
+            ls -la build/android build/test-results 2>/dev/null || true
+          fi
           exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
