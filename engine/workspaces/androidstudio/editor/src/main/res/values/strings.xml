@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<resources>
+    <!-- Distinct from the game runtime's "JasperEngine": the launcher must say which of the two
+         icons opens the editor. -->
+    <string name="app_name">JasperEngine Editor</string>
+</resources>
