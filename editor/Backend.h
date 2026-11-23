@@ -73,8 +73,12 @@ namespace jasperengine::editor{
             // (BackendAndroid.cpp), and the soft keyboard is requested by display.
             static int runAndroid(struct android_app* app, int argc, char** argv);
             static void showSoftKeyboard(bool show);
-            // The soft keyboard's text, drained once per frame into ImGui's input queue
+            // The soft keyboard's text, drained once per frame into ImGui's input queue. The
+            // keyboard reports its whole text, so a deletion is only visible as a diff: this
+            // turns it into one backspace per removed character.
             static void queueText(const std::u16string& utf16);
+            // the keyboard opened on another field: its text starts empty, not with the last one's
+            static void resetKeyboardText();
             #endif
     };
 

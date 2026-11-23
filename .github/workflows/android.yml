@@ -35,10 +35,13 @@ permissions:
   pull-requests: write  # a failing build posts its own errors to the PR: this run's logs and
                         # artifacts cannot be downloaded from outside the runner
 
-# one run per ref: a new dispatch supersedes the one still building
+# One run per ref per job. The editor's job is what a dispatch is usually for, and it is short;
+# cancel-in-progress is scoped to it below so a dispatch no longer kills the game's job, which
+# used to leave a run in_progress for hours with its log unreadable (GitHub serves a run's logs
+# only once it is complete).
 concurrency:
   group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -120,12 +123,48 @@ jobs:
           env $launcher ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           apk=editor/build/outputs/apk/debug/editor-debug.apk
-          if [[ -f $apk ]]; then cp "$apk" "$GITHUB_WORKSPACE/build/android/jasperengine-editor.apk"; fi
+          if [[ -f $apk ]]; then
+            cp "$apk" "$GITHUB_WORKSPACE/build/android/jasperengine-editor.apk"
+            # continue-on-error makes every outcome show as success, which is exactly the
+            # blindness this build is being fixed for: the verdict goes out as an annotation.
+            echo "::notice title=Editor APK built::$(ls -lh "$apk" | awk '{print $5}') -- artifact jasperengine-editor-apk-arm64-v8a"
+          else
+            echo "::error title=Editor APK not produced::gradle exited $status and $apk does not exist; see the digest below"
+          fi
           exit $status
 
-      # The editor's APK on its own, uploaded whatever the game's step did: it is the artifact a
-      # phone-installable editor comes from, and making it depend on the game APK is what kept it
-      # from ever being downloadable (the run was red before this step was reached).
+      # uploads whatever the exit status was: a half-finished build must not take the artifact with it
+      # A run's own logs cannot be downloaded from outside the runner (the artifact host is not
+      # reachable from the session that reads them), and a session that cannot read the log is
+      # working blind. So the log is made readable where the API does serve it: as a check-run
+      # annotation. Annotations have a 64 KB budget per step and ~64 KB per message, so the tail
+      # is split into chunks: the tail is where a build's verdict is.
+      - name: Publish the build log where it can be read
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          for log in build/test-results/android-editor.log build/android/gradle.log; do
+            [[ -f $log ]] || continue
+            # the compiler's own message lines, then the tail: a 1 MB log cannot be sent whole
+            {
+              grep -aE "error:|warning:|CMake Error|undefined symbol|FAILED|BUILD (SUCCESSFUL|FAILED)|ninja: build stopped" "$log" | head -n 120
+              echo "--- tail ---"
+              tail -c 40000 "$log"
+            } > /tmp/logdigest.txt
+            total=$(wc -c </tmp/logdigest.txt)
+            # 6 chunks of ~6.5 KB: comfortably inside the per-message limit, and enough to see a
+            # build's start of failure and its end
+            split -b 6500 -a 2 /tmp/logdigest.txt /tmp/chunk_
+            echo "::error title=$log ($total bytes)::digest in the annotations of this step"
+            for f in /tmp/chunk_*; do
+              printf "::error title=%s part %s::%s\n" "$log" "${f##*_}" "$(sed -n '1,200p' "$f" | sed 's/%/%25/g; s/\r/\\r/g' | tr -d '\000-\010\013\014\016-\037')"
+            done
+          done
+          exit 0
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -133,6 +172,45 @@ jobs:
           path: build/android/jasperengine-editor.apk
           if-no-files-found: warn
           retention-days: 30
+
+      # the game's build moved to its own job below: it takes hours on this runner, and while it
+      # held the editor's job open there was no run-level verdict to read a log from.
+
+  game:
+    name: APK (${{ inputs.abis || 'arm64-v8a' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      JASPER_CI_REPRO: tools/build.sh android
+      ANDROID_ABIS: ${{ inputs.abis || 'arm64-v8a' }}
+    steps:
+      - name: Start
+        run: echo "JASPER_CI_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/free-disk
+        with:
+          need: 65
+
+      - uses: ./.github/actions/image
+        id: image
+        with:
+          target: android
+
+      - uses: ./.github/actions/ccache-restore
+        with:
+          lane: android
+          max-size: 1G
+          toolchain: ${{ steps.image.outputs.tag }}
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/.cache/gradle/caches
+            build/.cache/gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('engine/workspaces/androidstudio/**/*.gradle') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - name: APK
         run: tools/ci/logged.sh android-build "tools/build.sh android"
@@ -178,6 +256,37 @@ jobs:
             done
           done
           gh pr comment "$PR_NUMBER" --body-file build/errors.md || echo "::warning::could not comment on PR $PR_NUMBER"
+          exit 0
+
+      # A run's own logs cannot be downloaded from outside the runner (the artifact host is not
+      # reachable from the session that reads them), and a session that cannot read the log is
+      # working blind. So the log is made readable where the API does serve it: as a check-run
+      # annotation. Annotations have a 64 KB budget per step and ~64 KB per message, so the tail
+      # is split into chunks: the tail is where a build's verdict is.
+      - name: Publish the build log where it can be read
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          for log in build/test-results/android-editor.log build/android/gradle.log build/test-results/android-build.log; do
+            [[ -f $log ]] || continue
+            # the compiler's own message lines, then the tail: a 1 MB log cannot be sent whole
+            {
+              grep -aE "error:|warning:|CMake Error|undefined symbol|FAILED|BUILD (SUCCESSFUL|FAILED)|ninja: build stopped" "$log" | head -n 120
+              echo "--- tail ---"
+              tail -c 40000 "$log"
+            } > /tmp/logdigest.txt
+            total=$(wc -c </tmp/logdigest.txt)
+            # 6 chunks of ~6.5 KB: comfortably inside the per-message limit, and enough to see a
+            # build's start of failure and its end
+            split -b 6500 -a 2 /tmp/logdigest.txt /tmp/chunk_
+            echo "::error title=$log ($total bytes)::digest in the annotations of this step"
+            for f in /tmp/chunk_*; do
+              printf "::error title=%s part %s::%s\n" "$log" "${f##*_}" "$(sed -n '1,200p' "$f" | sed 's/%/%25/g; s/\r/\\r/g' | tr -d '\000-\010\013\014\016-\037')"
+            done
+          done
           exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

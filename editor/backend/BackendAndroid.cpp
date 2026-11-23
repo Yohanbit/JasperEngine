@@ -20,6 +20,7 @@
 
 #include "AndroidTextInput.h"
 #include "Engine.h"
+#include "HostServices.h"
 #include "Log.h"
 #include "TextureRender.h"
 
@@ -31,7 +32,9 @@
 #include <game-activity/GameActivity.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -57,6 +60,16 @@ namespace jasperengine::editor {
 
         int gWidth = 0;
         int gHeight = 0;
+        // The window is drawn behind the status and navigation bars (EditorActivity asks for
+        // that: setDecorFitsSystemWindows(false)), and the bars stay visible over it. Without an
+        // inset the editor's own top menu row is drawn under the status bar -- on a Xiaomi
+        // 2207117BPG at 2400x1080 the menu row sits in the battery and wifi icons -- and the
+        // bottom of the status bar path is cut. These are scaled to the surface; see
+        // androidUiInsets().
+        int gInsetTop = 0;
+        int gInsetRight = 0;
+        int gInsetBottom = 0;
+        int gInsetLeft = 0;
         bool gShouldClose = false;
         bool gContextUp = false;
         bool gRedrawRequested = false;
@@ -71,9 +84,54 @@ namespace jasperengine::editor {
         bool gSoftKeyboardShown = false;
 
         // The soft keyboard's text arrives on GameActivity's thread; ImGui's input queue is not
-        // thread safe, so it is queued here and drained once per frame.
+        // thread safe, so what it means for the focused field is worked out here and drained once
+        // per frame.
+        //
+        // A deletion is invisible in the character stream: the keyboard reports its whole text
+        // each time, and the character that is gone simply does not arrive again. So the diff is
+        // kept -- the engine's own ComponentTextInput (AndroidTextInput.h), the class its
+        // InputField uses for the same job -- which yields "one backspace per removed character".
+        // Without it the on-screen backspace erased nothing in the editor.
         std::mutex gTextMutex;
+        jasperengine::android::ComponentTextInput gKeyboardText;
         std::vector<unsigned int> gPendingCharacters;
+        size_t gPendingBackspaces = 0;
+
+        // The bars' heights in dp, which is what Android itself uses: a status bar is 24 dp,
+        // a gesture navigation bar 24 dp and the three-button one 48 dp. Nothing in native code
+        // can read the real insets -- they are Java's (WindowInsets.getInsets) -- so these are the
+        // platform's own defaults, scaled by the surface's density.
+        constexpr int STATUS_BAR_DP = 24;
+        constexpr int NAV_BAR_GESTURE_DP = 24;
+        constexpr int NAV_BAR_BUTTONS_DP = 48;
+        // the smallest Android phone is ~320 dp wide, so a density below 1 is not a phone
+        constexpr float MIN_DENSITY = 1.0f;
+
+        // dp -> pixels for this surface. Android's baseline is 160 dpi: a 2400x1080 phone is
+        // about 420 dpi, so one dp is ~2.6 px. screenDpi() is the display's own density.
+        float surfaceDensity(){
+            const float dpi = HostServices::screenDpi();
+            if (dpi >= 120.0f)
+                return dpi / 160.0f;
+            return MIN_DENSITY;
+        }
+
+        // Reads the insets the bars occupy, in pixels of this surface, from the display metrics
+        // the engine's HostServices reports. Called once per surface (and again when it changes),
+        // because the values only change with a rotation or a different navigation mode.
+        void updateUiInsets(){
+            const float density = surfaceDensity();
+            gInsetTop = static_cast<int>(STATUS_BAR_DP * density + 0.5f);
+            // The gesture bar is the common case on Android 13; three-button navigation is
+            // taller, and over-reserving by 24 dp on the short edge is worse than the bars
+            // overlapping a slider, so the larger of the two is reserved only when the display
+            // is tall enough that it costs nothing. Gesture is the default from Android 10 on.
+            gInsetBottom = static_cast<int>(NAV_BAR_GESTURE_DP * density + 0.5f);
+            gInsetLeft = 0;
+            gInsetRight = 0;
+            Log::print("[editor] UI insets: top %d, bottom %d px (density %.2f)",
+                       gInsetTop, gInsetBottom, density);
+        }
 
         double monotonicSeconds(){
             using namespace std::chrono;
@@ -138,6 +196,7 @@ namespace jasperengine::editor {
 
             eglQuerySurface(gDisplay, gSurface, EGL_WIDTH, &gWidth);
             eglQuerySurface(gDisplay, gSurface, EGL_HEIGHT, &gHeight);
+            updateUiInsets();
 
             Log::print("[editor] ES3 context up, %dx%d, %s / %s", gWidth, gHeight,
                       reinterpret_cast<const char*>(glGetString(GL_VERSION)),
@@ -211,6 +270,19 @@ namespace jasperengine::editor {
             io.DisplaySize = ImVec2(static_cast<float>(gWidth), static_cast<float>(gHeight));
             io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
 
+            // The editor lays itself out in the viewport's WORK area (menu bar, dockspace), so
+            // insetting that is what moves every panel clear of the system bars -- the top menu
+            // row out from under the status bar's clock and battery, the bottom out from under
+            // the gesture bar. Centring: the work area is measured from the surface, so it is
+            // symmetric left/right by construction; the left/right insets exist for a cutout or
+            // a landscape gesture bar and are 0 on a normal portrait phone.
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            viewport->WorkPos = ImVec2(static_cast<float>(gInsetLeft),
+                                       static_cast<float>(gInsetTop));
+            viewport->WorkSize = ImVec2(
+                static_cast<float>(std::max(0, gWidth - gInsetLeft - gInsetRight)),
+                static_cast<float>(std::max(0, gHeight - gInsetTop - gInsetBottom)));
+
             const double now = monotonicSeconds();
             io.DeltaTime = gLastFrameTime > 0.0
                 ? static_cast<float>(now - gLastFrameTime) : 1.0f / 60.0f;
@@ -218,6 +290,13 @@ namespace jasperengine::editor {
 
             {
                 std::lock_guard<std::mutex> lock(gTextMutex);
+                // Backspace and Delete are what ImGui's InputText acts on for an erased
+                // character; the character keys alone only ever grow a field.
+                for (size_t i = 0; i < gPendingBackspaces; ++i){
+                    io.AddKeyEvent(ImGuiKey_Backspace, true);
+                    io.AddKeyEvent(ImGuiKey_Backspace, false);
+                }
+                gPendingBackspaces = 0;
                 for (unsigned int c : gPendingCharacters)
                     io.AddInputCharacter(c);
                 gPendingCharacters.clear();
@@ -272,6 +351,7 @@ namespace jasperengine::editor {
             constexpr int IME_FLAG_NO_FULLSCREEN = 33554432;
             GameActivity_setImeEditorInfo(gAndroidApp->activity, TYPE_CLASS_TEXT,
                                           IME_ACTION_NONE, IME_FLAG_NO_FULLSCREEN);
+            Backend::resetKeyboardText();
             GameActivity_showSoftInput(gAndroidApp->activity, 0);
         }else{
             GameActivity_hideSoftInput(gAndroidApp->activity, 0);
@@ -280,17 +360,24 @@ namespace jasperengine::editor {
 
     void Backend::queueText(const std::u16string& utf16){
         std::lock_guard<std::mutex> lock(gTextMutex);
-        for (size_t i = 0; i < utf16.size(); ++i){
-            char32_t codepoint = utf16[i];
-            if (codepoint >= 0xD800 && codepoint <= 0xDBFF && i + 1 < utf16.size()){
-                const char32_t low = utf16[i + 1];
-                if (low >= 0xDC00 && low <= 0xDFFF){
-                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
-                    ++i;
-                }
-            }
-            gPendingCharacters.push_back(codepoint);
-        }
+        // The keyboard hands over its whole text, not the keystroke: the diff against what it
+        // held last time is what says whether a character was typed or erased, and how many.
+        // ComponentTextInput is the engine's own implementation of that (AndroidTextInput.h),
+        // counting whole characters so an emoji is typed once and erased with one backspace.
+        const jasperengine::android::TextEdit edit = gKeyboardText.update(utf16);
+        gPendingBackspaces += edit.backspaces;
+        for (char32_t typed : edit.typed)
+            gPendingCharacters.push_back(typed);
+    }
+
+    void Backend::resetKeyboardText(){
+        std::lock_guard<std::mutex> lock(gTextMutex);
+        // A field that gains focus starts the keyboard empty, not with the text of the field
+        // that had it: without this, the first backspace in a new field would erase the whole
+        // previous field's text in one go (the diff would count every removed character).
+        gKeyboardText.reset(std::u32string());
+        gPendingCharacters.clear();
+        gPendingBackspaces = 0;
     }
 
     namespace {
@@ -471,6 +558,9 @@ namespace jasperengine::editor {
                     break;
                 case APP_CMD_WINDOW_RESIZED:
                 case APP_CMD_CONFIG_CHANGED:
+                    // a rotation changes the surface and the bars with it: the insets are
+                    // recomputed from the new density and the work area follows in the next frame
+                    updateUiInsets();
                     gRedrawRequested = true;
                     break;
                 case APP_CMD_DESTROY:
