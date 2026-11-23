@@ -2,8 +2,9 @@
 
 Secondary agent (subsystem porting) status for the JasperEngine Android port.
 Companion files written by this agent: `ANDROID_TEST_MATRIX.md`, `ANDROID_BUGS.md`,
-`ANDROID_HANDOFF.md`. The main agent's audit lives in `ANDROID-AUDIT.md`; this file does not
-repeat it.
+`ANDROID_HANDOFF.md`, `ANDROID_INTEGRATIONS.md` (the five connections, with the code) and
+`ANDROID_CLEAN_CLONE.md` (one command from a bare checkout). The main agent's audit lives in
+`ANDROID-AUDIT.md`; this file does not repeat it.
 
 Branch: `arena/593187bf-jasperengine` (from `8adc8a93`). Nothing here is merged; the PR stays open
 for agent 3.
@@ -20,6 +21,9 @@ Every claim below carries one of:
 | **compiled** | It builds warning-free, but nothing ran it |
 | **inferred** | Read from the code; no test covers it |
 | **pending** | Not done. It is on the list below, not forgotten |
+
+Reproduce everything below with `python3 tools/android/verify.py` from a fresh clone (no CMake, no
+SDK); `ANDROID_CLEAN_CLONE.md` has the run.
 
 A subsystem that compiles is not a subsystem that works. Of the four landed here, all four are
 **verified** at the SDK-free layer (the tests in `engine/tests/core/platform/AndroidSubsystemsTest.cpp`

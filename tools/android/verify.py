@@ -273,6 +273,12 @@ def main(argv):
             else:
                 report.ok(f"{header}.h")
 
+        report.step("the three integration demos (tools/android/integration/) -- the code the doc gives")
+        for demo in ("gestures-demo", "import-demo", "space-demo"):
+            build_and_run(cxx, report, workdir, demo,
+                          [os.path.join(ROOT, f"tools/android/integration/{demo}.cpp"),
+                           os.path.join(ROOT, "engine/core/math/Vector2.cpp")], INCLUDES, expect=0)
+
         if arguments.quick:
             report.step("the fuzz harness (skipped by --quick)")
             report.note("400,209 hostile inputs not run")

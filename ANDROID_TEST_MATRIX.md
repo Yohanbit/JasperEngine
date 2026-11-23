@@ -190,7 +190,10 @@ Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -We
 selfcheck: every invariant holds
 ```
 
-The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
+The whole set — the suite, the selfcheck, every header twice, the integration demos, the fuzz run —
+is one command from a clean clone: `python3 tools/android/verify.py`, which needs nothing but a C++20
+compiler. `ANDROID_CLEAN_CLONE.md` records that run and its output; the individual commands are in
+`ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
 picked up by `file(GLOB_RECURSE CORE_TEST_SOURCES ... *Test.cpp)` and compiled with
 `engine/platform/android` already on the include path, so:
 `UNIT_SUITE=core UNIT_TEST_ARGS='--gtest_filter=Android*' tools/build.sh unit-tests` runs it plus

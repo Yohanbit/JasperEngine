@@ -113,6 +113,24 @@ with no device to run it on.
   beside them, runnable (`A` aborts under ASan). The audit found a **second** core defect the earlier
   report missed: `read()` at the end returns the buffer's first byte instead of 0 (10b-ii).
 
+### The five integrations, written out; and one command to check everything (`615a45f2` and after)
+
+- `ANDROID_INTEGRATIONS.md`: the five connections — the import pipeline (picker, preflight, copy,
+  recovery), free space before a write, where the project is, and the gestures — each with the file,
+  the function and line, the call, its dependencies, the expected behaviour and the code, Java and
+  C++ both. Integration 4 (gestures) needs no JNI and is the one to do first.
+- `tools/android/integration/{gestures,import,space}-demo.cpp`: the code that document gives,
+  compiled and run against the real headers, so the quoted output is a run and not a sketch.
+- `tools/android/verify.py`: from a bare checkout with a C++20 compiler and nothing else — the suite,
+  the selfcheck, every header twice under `-Werror`, the three demos, the 400k-input fuzz run, and
+  then the two `Data` defects, reported without failing the run because `Data.cpp` is not ours.
+- `tools/android/data-overflow-real.py`: the same defects, but with `seek` and `read` **lifted out of
+  the real `Data.cpp`** instead of retyped, so the ASan trace is about the shipped file. It exits 1
+  while the defect is present and 0 once the handoff's patch is applied; both states were checked.
+- `ANDROID_CLEAN_CLONE.md`: the clean-clone run, its real output, and the by-hand commands.
+- `ANDROID_HANDOFF.md` §4: the verdict asked for — the SIGSEGV is an **unfixed defect** in the core,
+  not a known issue and not a deliberate reproduction, with the trace and the full chain.
+
 ## Still not done
 
 - Nothing here has run on a phone, an emulator or an APK: no SDK, no NDK, no `javac`, no Docker in

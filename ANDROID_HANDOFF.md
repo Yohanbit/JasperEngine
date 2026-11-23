@@ -14,6 +14,11 @@ to conflict with.
 
 ## What the integration agent should call (in priority order)
 
+The short version of each, for the file the integration touches. The long version — every file, the
+function and line, the dependencies, the expected behaviour and the Java — is
+**`ANDROID_INTEGRATIONS.md`**, which covers the five as one story including the picker those four
+below assume exists.
+
 ### 1. Free space before a write — no file of yours changes to *use* it, one to *expose* it
 
 ```cpp
@@ -158,6 +163,70 @@ g++ -std=c++20 -O0 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 /tmp/datarepro A     # aborts: AddressSanitizer SEGV in the read
 /tmp/datarepro B     # runs every case, including the patch's answers
 ```
+
+### The verdict on the SIGSEGV, asked for explicitly
+
+The question was whether the crash is a known issue, a deliberate reproduction, or an unfixed defect.
+It is the third, and the three answers are worth separating:
+
+| | |
+|---|---|
+| A known issue? | **No.** Nothing in the repository documents it: no entry in `docs/`, no `TODO`/`FIXME` in `Data.cpp`, no test that asserts the current behaviour. (This checkout is shallow — 30 commits — so "since it was written" is not something it can show; what it can show is that nothing present describes the behaviour as intended.) |
+| A deliberate reproduction? | **No.** `tools/android/data-io-overflow-repro.cpp` is this branch's file and it is deliberate — but it is a *reproduction of the defect*, not a defect introduced to be reproduced. `engine/core/io/Data.cpp` is unmodified: `git diff` against the branch point lists no change to it (point 3's `git diff --name-status` has 19 files and none of them is `Data.cpp`). |
+| An unfixed defect? | **Yes.** It crashes the shipped code, and it is the main agent's file to fix. |
+
+The stack trace is from the **real bodies**, not from the copy in the repro: `tools/android/data-overflow-real.py`
+lifts `Data::seek` and `Data::read` out of `engine/core/io/Data.cpp` by brace matching, puts the
+verbatim text inside a struct with the same fields, and compiles it with ASan+UBSan. So the trace
+below is about `Data.cpp` as it ships, with the only edit being the dropped `Data::` qualifier that a
+definition inside a class cannot carry:
+
+```
+$ python3 tools/android/data-overflow-real.py
+   unsigned int read(unsigned char* aDst, unsigned int aBytes) {
+       if (offset + aBytes >= dataLength)
+           aBytes = dataLength - offset;
+       memcpy(aDst, dataPtr + offset, aBytes);
+       offset += aBytes;
+       return aBytes;
+   }
+
+   void seek(int aOffset) {
+       if (aOffset >= 0)
+           offset = aOffset;
+       else
+           offset = dataLength + aOffset;
+       if (offset > dataLength-1)
+           offset = dataLength-1;
+   }
+
+A. an empty Data, seek(-4), read(8)  (FileData.newFile -> seek -> read8)
+   pos() after seek(-4) = 4294967292
+   reading, expecting AddressSanitizer below
+AddressSanitizer:DEADLYSIGNAL
+=================================================================
+==8413==ERROR: AddressSanitizer: SEGV on unknown address 0x00009fff7fff (pc 0x7fd6bb83bd5a ...)
+==8413==The signal is caused by a READ memory access.
+    #0 0x7fd6bb83bd5a in AddressIsPoisoned ../../../../src/libsanitizer/asan/asan_mapping.h:379
+    #1 0x7fd6bb83bd5a in QuickCheckForUnpoisonedRegion .../asan_interceptors_memintrinsics.h:31
+    #2 0x7fd6bb847fe3 in __interceptor_memcpy .../sanitizer_common_interceptors.inc:827
+    #3 0x560ddbafdbdf in jasperengine::DataLike::read(unsigned char*, unsigned int) /tmp/.../lifted.h:8
+    #4 0x560ddbafd50a in main /tmp/.../harness.cpp:39
+    #5 0x7fd6bb645249  (/lib/x86_64-linux-gnu/libc.so.6+0x27249)
+    #6 0x7fd6bb645304 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x27304)
+SUMMARY: AddressSanitizer: SEGV ../../../../src/libsanitizer/asan/asan_mapping.h:379 in AddressIsPoisoned
+==8413==ABORTING
+```
+
+`lifted.h:8` is the `memcpy` line of `Data::read` as the file writes it. The chain is one line long:
+`seek` computes `offset = dataLength + aOffset` in `unsigned int` (0 + -4 = 4294967292), the
+`offset > dataLength-1` clamp then compares 4294967292 against 4294967295 and lets it through, and
+`read` computes `dataLength - offset` in the same unsigned type: 0 - 4294967292 wraps to 4, so a
+request for 8 bytes becomes a 4-byte `memcpy` from `dataPtr + 4294967292`.
+
+The script is a gate, not a demonstration: it exits **1** while the defect is present and **0** once
+the patch below is applied. Both states were checked — the patch was applied to a copy of the tree in
+`/tmp` and the same script then printed `the two defects are fixed in Data.cpp` and exited 0.
 
 ### A. A read past the end, with an unsigned wrap (a crash)
 
