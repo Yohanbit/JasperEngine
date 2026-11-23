@@ -1321,6 +1321,7 @@ TEST(AndroidTouchGestures, ADragIsNotATap) {
 
 // ---- an import that was cut short
 
+using jasperengine::android::planModelImport;
 using jasperengine::android::planTransfer;
 using jasperengine::android::settleTransfer;
 using jasperengine::android::transferStep;
@@ -1446,4 +1447,72 @@ TEST(AndroidImportTransfer, EveryPlanWritesSomethingTheScannerCanRecover) {
     EXPECT_EQ(dir.temporary, "dir/.import.jeimport");
     EXPECT_EQ(dir.target, "dir/import");
     EXPECT_EQ(temporaryTarget(dir.temporary), dir.target);
+}
+
+TEST(AndroidModelSidecars, ATwoModelProjectCannotLoseOneModelSCommonPngToTheOther) {
+    // Body/ and Head/ both ship a "common.png". Imported flat, one overwrote the other and one of
+    // the two models rendered with the wrong texture -- silently, because both files are valid.
+    const std::string body = R"({"asset":{"version":"2.0"},
+        "images":[{"uri":"textures/common.png"},{"uri":"textures/skin.png"}]})";
+    const std::string head = R"({"asset":{"version":"2.0"},
+        "images":[{"uri":"textures/common.png"},{"uri":"textures/eyes.png"}]})";
+    const ModelImportPlan bodyPlan = planModelImport(body, "Characters/Body.gltf");
+    const ModelImportPlan headPlan = planModelImport(head, "Characters/Head.gltf");
+    std::set<std::string> names;
+    for (const ModelImportPlan* plan : {&bodyPlan, &headPlan}) {
+        for (const SidecarImport& sidecar : plan->sidecars) names.insert(sidecar.assetName);
+    }
+    EXPECT_EQ(names.size(), 4u) << "four files in, four distinct assets";
+    EXPECT_TRUE(names.count("body_common.png"));
+    EXPECT_TRUE(names.count("head_common.png"));
+}
+
+TEST(AndroidModelSidecars, TheDocumentIsRewrittenToNameTheFilesTheImportActuallyCreates) {
+    // flattening without rewriting leaves the .gltf pointing at "textures/skin.png", a folder the
+    // import never made: the model loads with no textures and nothing says why
+    const std::string text = R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Body.bin"}],
+        "images":[{"uri":"textures/skin.png"}]})";
+    const ModelImportPlan plan = planModelImport(text, "Body.gltf");
+    EXPECT_TRUE(plan.parsed);
+    ASSERT_EQ(plan.sidecars.size(), 2u);
+    EXPECT_EQ(plan.sidecars[0].assetName, "body_body.bin");
+    EXPECT_EQ(plan.sidecars[1].assetName, "body_skin.png");
+    // and the document names them
+    EXPECT_NE(plan.gltfText.find("\"body_body.bin\""), std::string::npos) << plan.gltfText;
+    EXPECT_NE(plan.gltfText.find("\"body_skin.png\""), std::string::npos) << plan.gltfText;
+    EXPECT_EQ(plan.gltfText.find("textures/skin.png"), std::string::npos) << plan.gltfText;
+}
+
+TEST(AndroidModelSidecars, TwoFilesWithTheSameLeafInDifferentFoldersAreNumbered) {
+    const std::string text = R"({"asset":{"version":"2.0"},
+        "images":[{"uri":"a/skin.png"},{"uri":"b/skin.png"}]})";
+    const ModelImportPlan plan = planModelImport(text, "Body.gltf");
+    std::set<std::string> names;
+    for (const SidecarImport& sidecar : plan.sidecars) names.insert(sidecar.assetName);
+    EXPECT_EQ(names.size(), 2u) << "one must not overwrite the other";
+}
+
+TEST(AndroidModelSidecars, ADataUriIsLeftAloneAndAMalformedDocumentChangesNothing) {
+    const std::string inlined = R"({"asset":{"version":"2.0"},
+        "images":[{"uri":"data:image/png;base64,AAAA"},{"uri":"skin.png"}]})";
+    const ModelImportPlan plan = planModelImport(inlined, "Body.gltf");
+    EXPECT_EQ(plan.sidecars.size(), 1u) << "the embedded image is not a file to import";
+    EXPECT_NE(plan.gltfText.find("data:image/png;base64,AAAA"), std::string::npos)
+        << "an inline image keeps its bytes";
+
+    const std::string broken = R"({"images":[)";
+    const ModelImportPlan none = planModelImport(broken, "Body.gltf");
+    EXPECT_FALSE(none.parsed);
+    EXPECT_TRUE(none.sidecars.empty());
+    EXPECT_TRUE(none.gltfText.empty());
+}
+
+TEST(AndroidModelSidecars, TheModelNamePrefixIsALegalAssetName) {
+    // a model with spaces, a colon and a leading digit: its sidecars must still be importable
+    const std::string text = R"({"asset":{"version":"2.0"},"images":[{"uri":"My Skin (1).PNG"}]})";
+    const ModelImportPlan plan = planModelImport(text, "12 Head:Body.gltf");
+    ASSERT_EQ(plan.sidecars.size(), 1u);
+    const std::string& name = plan.sidecars[0].assetName;
+    EXPECT_EQ(name, "_12_head_body_my_skin_1.png") << name;
+    expectLegalName(name);
 }

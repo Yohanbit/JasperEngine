@@ -185,6 +185,141 @@ namespace jasperengine::android {
         return sentence;
     }
 
+    // One sidecar's landing place in the import folder.
+    struct SidecarImport {
+        std::string uri;          // the URI the .gltf wrote ("textures/skin.png")
+        std::string assetName;    // the name it lands under, flat ("body_skin.png")
+        bool renamed = false;     // the provider/import gave it another name (a collision, a bad char)
+    };
+
+    struct ModelImportPlan {
+        std::vector<SidecarImport> sidecars;    // one per external file, in the glTF's order
+        // the .gltf's text with every external URI replaced by its sidecar's assetName: a flat
+        // folder needs a flat document, or the model keeps pointing at folders that are not there
+        std::string gltfText;
+        // false when the document did not parse (gltfText is then the input, unchanged)
+        bool parsed = false;
+    };
+
+    namespace detail {
+
+        // The identifier an imported model's sidecar is named after: "<model>_<leaf stem>.<ext>".
+        // The model's own name is the prefix because two models routinely ship a "skin.png" or a
+        // "common.png" in different folders, and a flat import folder cannot hold both.
+        inline std::string sidecarStemOf(const std::string& modelLeaf, const std::string& uri) {
+            const std::string leaf = detail::sidecarFileName(uri);
+            const size_t dot = leaf.find_last_of('.');
+            const std::string stem = dot == std::string::npos ? leaf : leaf.substr(0, dot);
+            std::string out;
+            // lowercase ASCII and '_' only: the same rule importedAssetName applies to a model's
+            // own file name, so the pair reads alike in the Project panel
+            auto push = [&out](const std::string& text) {
+                bool lastUnderscore = false;
+                for (char c : text) {
+                    const char lowered = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+                    const bool keep = (lowered >= 'a' && lowered <= 'z') || (lowered >= '0' && lowered <= '9');
+                    if (keep) {
+                        out.push_back(lowered);
+                        lastUnderscore = false;
+                    } else if (!out.empty() && !lastUnderscore) {
+                        out.push_back('_');
+                        lastUnderscore = true;
+                    }
+                }
+            };
+            push(modelLeaf);
+            out.push_back('_');
+            push(stem);
+            while (!out.empty() && out.back() == '_') out.pop_back();
+            if (out.empty()) out = "asset";
+            if (out.front() >= '0' && out.front() <= '9') out.insert(out.begin(), '_');
+            return out;
+        }
+
+        inline std::string extensionWithDotOf(const std::string& uri) {
+            const std::string leaf = detail::sidecarFileName(uri);
+            const size_t dot = leaf.find_last_of('.');
+            if (dot == std::string::npos) return std::string();
+            // lowercased: Android's volumes are case-sensitive and assetTypeForImport() compares
+            // lowercase, so "skin.PNG" imported as-is was a file the type table could not name
+            std::string extension = leaf.substr(dot);
+            for (char& c : extension) {
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            }
+            return extension;
+        }
+    }
+
+    // How a .gltf and its files land in one flat import folder.
+    //
+    // A phone's import has no directories to spare: every file arrives separately and lands in one
+    // folder, so a model's "textures/skin.png" becomes "body_skin.png" -- and the document has to
+    // say so, or it keeps naming a relative path that no longer exists. This rewrites the URIs and
+    // gives every sidecar a name derived from its model's, which is what keeps "Body/textures/
+    // common.png" and "Head/textures/common.png" two different assets instead of one overwriting
+    // the other.
+    inline ModelImportPlan planModelImport(const std::string& gltfText, const std::string& modelFileName) {
+        ModelImportPlan plan;
+        const std::string modelLeaf = detail::sidecarFileName(modelFileName);
+        const SidecarReport report = gltfSidecars(gltfText);
+        if (!report.parsed) return plan;
+        // the model's stem, without its .gltf
+        std::string modelStem = modelLeaf;
+        const size_t dot = modelStem.find_last_of('.');
+        if (dot != std::string::npos) modelStem = modelStem.substr(0, dot);
+
+        // each distinct URI gets one name, assigned in the document's order so a run is repeatable
+        std::map<std::string, std::string> assigned;
+        std::set<std::string> used;
+        for (const Sidecar& sidecar : report.sidecars) {
+            if (sidecar.embedded || sidecar.fromBufferView) continue;
+            if (assigned.count(sidecar.uri)) continue;   // the same file named twice is one asset
+            const std::string name = detail::sidecarStemOf(modelStem, sidecar.uri) + detail::extensionWithDotOf(sidecar.uri);
+            std::string unique = name;
+            int counter = 1;
+            while (!used.insert(unique).second) {
+                // two URIs with the same leaf ("a/skin.png", "b/skin.png"): numbered, as the
+                // editor's own uniqueFileName does
+                const size_t ext = name.find_last_of('.');
+                const std::string stem = ext == std::string::npos ? name : name.substr(0, ext);
+                const std::string extension = ext == std::string::npos ? std::string() : name.substr(ext);
+                unique = stem + "_" + std::to_string(counter++) + extension;
+            }
+            assigned[sidecar.uri] = unique;
+        }
+        for (const auto& [uri, name] : assigned) {
+            SidecarImport entry;
+            entry.uri = uri;
+            entry.assetName = name;
+            plan.sidecars.push_back(entry);
+        }
+
+        // rewrite the document: the same parse, with each "uri" the plan renamed replaced. Done on
+        // the JSON rather than on the bytes so a URI that happens to appear in a name or a comment
+        // is not touched.
+        nlohmann::json document;
+        try {
+            document = nlohmann::json::parse(gltfText.begin(), gltfText.end());
+        } catch (const std::exception&) {
+            return plan;
+        }
+        for (const char* key : {"buffers", "images"}) {
+            const auto it = document.find(key);
+            if (it == document.end() || !it->is_array()) continue;
+            for (nlohmann::json& entry : *it) {
+                if (!entry.is_object()) continue;
+                const auto uri = entry.find("uri");
+                if (uri == entry.end() || !uri->is_string()) continue;
+                const std::string text = uri->get<std::string>();
+                const auto found = assigned.find(text);
+                if (found != assigned.end()) *uri = found->second;
+            }
+        }
+        plan.gltfText = document.dump();
+        plan.parsed = true;
+        return plan;
+    }
+
     // A model's extension, deciding which parser reads it: "gltf" is the only one that is text.
     inline bool isAsciiGltf(std::string_view fileName) {
         const size_t dot = fileName.find_last_of('.');
