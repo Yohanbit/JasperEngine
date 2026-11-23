@@ -11,6 +11,11 @@
 #include "pixelart/ScreenTransition.h"
 #include "util/ScriptPropertyCache.h"
 #include "util/ProjectChecks.h"
+#if defined(__ANDROID__)
+#include "AndroidProjectLayout.h"
+#include "JasperEngineAndroid.h"
+#include "System.h"
+#endif
 #include "asset/ModelSubAssets.h"
 #include "memory/HeapTrim.h"
 #include "render/LayerViewCamera.h"
@@ -7793,6 +7798,39 @@ bool editor::Project::loadProject(const std::filesystem::path requestedPath, boo
             Out::error("Project file does not exist: %s", projectFile.string().c_str());
             return false;
         }
+
+        // Where this project sits, before the user spends an hour in it. On Android that is the
+        // difference between "kept where you put it" and "deleted with the app": the private and
+        // Android/data folders are wiped on uninstall and no file manager can see the private one,
+        // a picked SAF folder may not support the atomic rename a save needs, and a project on an SD
+        // card may not be there next start. The rules and their sentences are
+        // platform/android/AndroidProjectLayout.h, so this reports them rather than deciding them.
+        // Off Android the whole block is absent: a desktop has none of those places.
+#if defined(__ANDROID__)
+        {
+            // Both roots the app owns: its private files dir, and its own folder in Android/data.
+            // Passing the second one matters -- without it a project in Android/data classifies as
+            // shared storage the app was never granted, and the editor would tell the user that
+            // nothing can be saved in a folder it can write to perfectly well. A path below neither,
+            // with no SAF grant, really is shared storage: classifyLocation says so and accessFor
+            // turns that into the sentence the user reads.
+            System* system = &System::instance();
+            auto* androidSystem = dynamic_cast<JasperEngineAndroid*>(system);
+            const std::string internalRoot = system->getUserDataPath();
+            const std::string externalRoot = androidSystem != nullptr ? androidSystem->getExternalDataPath() : std::string();
+            const android::ProjectLocation location =
+                android::classifyLocation(path.string(), internalRoot, externalRoot);
+            const android::ProjectAccess access = android::accessFor(location);
+            if (!access.warning.empty()) {
+                // a warning, not a refusal: the project opens, and the user is told what it costs
+                Out::warning("Project location: %s", access.warning.c_str());
+                projectStorageWarning = access.warning;
+            }
+            // A save replaces a document through a rename; a provider that cannot do that turns every
+            // save into copy-then-delete, which can leave neither. Recorded so the save path knows.
+            projectStorageLosesAtomicRename = access.canWrite && !access.atomicRename;
+        }
+#endif
 
         // Load and parse project file
         editor::getEditorHost().reportLoadingProgress("Loading project...");

@@ -1293,6 +1293,13 @@ namespace jasperengine::editor{
         };
 
         std::filesystem::path projectPath;
+        // What the project's storage means for this session (AndroidProjectLayout.h): the sentence
+        // the user was shown when it opened ("" when there was nothing to warn about), and whether a
+        // save there has to give up the atomic rename. Both stay empty off Android, where none of
+        // those places exist. The editor shows the warning in the project window and the save path
+        // reads the second one; neither re-derives it.
+        std::string projectStorageWarning;
+        bool projectStorageLosesAtomicRename = false;
         // isTempProject() cache
         mutable std::filesystem::path tempCheckPath;
         mutable bool tempCheckResult = false;

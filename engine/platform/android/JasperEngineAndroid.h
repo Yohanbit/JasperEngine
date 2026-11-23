@@ -28,6 +28,10 @@ public:
     // statfs of the user data directory (AndroidStorageSpaceQuery.h), in the core's own shape so
     // System.h needs no Android header. Unknown when the call fails: never a refusal.
     virtual jasperengine::VolumeSpace getVolumeSpace() override;
+    // The app's own external files dir (Android/data/<pkg>/files). Empty when the volume is not
+    // mounted. Not a System virtual: it is an Android storage question, and the only caller is the
+    // editor's project-location check.
+    std::string getExternalDataPath();
     // a prebuilt player's content (game/ of the APK's assets, S30); else the assets root
     virtual std::string getAssetPath() override;
     virtual std::string getLuaPath() override;

@@ -220,6 +220,10 @@ std::string JasperEngineAndroid::getUserDataPath() {
     return NativeEngine::getInstance()->getInternalDataPath();
 }
 
+std::string JasperEngineAndroid::getExternalDataPath() {
+    return NativeEngine::getInstance()->getExternalDataPath();
+}
+
 jasperengine::VolumeSpace JasperEngineAndroid::getVolumeSpace() {
     // Where a save, a screenshot or an imported asset lands. statfs, not statvfs: Bionic has no
     // statvfs, and this is the same call Android's own StatFs class wraps.

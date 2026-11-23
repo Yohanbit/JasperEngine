@@ -529,6 +529,9 @@ NativeEngine::NativeEngine(struct android_app *app) {
     memset(&mState, 0, sizeof(mState));
 
     mInternalDataPath = mApp->activity->internalDataPath;
+    // game-activity fills it from getExternalFilesDir(null); it is NULL only when the volume is
+    // unavailable, in which case no project can be there either and "" is the right answer
+    mExternalDataPath = mApp->activity->externalDataPath != nullptr ? mApp->activity->externalDataPath : "";
 
     app->motionEventFilter = all_motion_filter;
     app->keyEventFilter = key_filter;
@@ -791,6 +794,10 @@ void NativeEngine::hideSoftInput(){
 
 std::string NativeEngine::getInternalDataPath(){
     return mInternalDataPath;
+}
+
+std::string NativeEngine::getExternalDataPath(){
+    return mExternalDataPath;
 }
 
 AAssetManager* NativeEngine::getAssetManager(){

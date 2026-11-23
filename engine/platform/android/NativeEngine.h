@@ -109,6 +109,10 @@ private:
 
     int mSurfWidth, mSurfHeight;
     std::string mInternalDataPath;
+    // the app's own external files dir (/storage/emulated/0/Android/data/<pkg>/files): visible over
+    // USB, deleted with the app. Captured beside the internal one; used to tell a project that lives
+    // in Android/data from one on shared storage (editor/Project.cpp, AndroidProjectLayout.h)
+    std::string mExternalDataPath;
 
     // Display.getRotation() in degrees as last read, and whether rotation 0 is portrait
     int mDisplayRotation;
@@ -205,6 +209,7 @@ public:
     void hideSoftInput();
 
     std::string getInternalDataPath();
+    std::string getExternalDataPath();
 
     AAssetManager* getAssetManager();
 };
