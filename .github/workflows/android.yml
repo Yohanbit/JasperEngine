@@ -161,7 +161,14 @@ jobs:
               for log in "${logs[@]}"; do
                 [[ -f $log ]] || continue
                 printf '<details><summary><code>%s</code></summary>\n\n```\n' "$log"
-                grep -nE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|symbol:|location:|required:|found:|Execution failed" "$log" | head -n 80
+                # from the first failure marker to the end: Gradle puts the reason below the
+                # marker, so filtering only matching lines hides what it says
+                start=$(grep -nE "^\* What went wrong|^FAILURE:" "$log" | head -1 | cut -d: -f1)
+                if [[ -n $start ]]; then
+                  sed -n "${start},\$p" "$log" | head -n 60
+                else
+                  grep -nE "^e: |error:|fatal error:|CMake Error|undefined reference|ninja: build stopped|symbol:|location:" "$log" | head -n 40
+                fi
                 printf '```\n</details>\n\n'
               done
             } > build/errors.md
