@@ -129,6 +129,17 @@ At start, walk the import folder with `android::isImportTemporary` and either re
 (`android::temporaryTarget` names the asset) or drop it: otherwise a killed copy sits in the folder
 forever. That scan is also what `AssetTypes` needs to never see, which the leading dot gives.
 
+### 2e. A model with sidecars (the flat folder)
+
+```cpp
+const android::ModelImportPlan plan = android::planModelImport(gltfText, pickedLeaf);
+// 1. ask the picker for exactly plan.sidecars[i].uri (a multi-select filtered to those names)
+// 2. write each file as plan.sidecars[i].assetName, in the project's asset folder
+// 3. write plan.gltfText as the .gltf: it names those files, so the model finds them
+```
+Without step 3 the model keeps pointing at `textures/skin.png`, and without step 2's names two
+models that ship a `common.png` overwrite each other (bug 10m).
+
 ### 3. Project place
 
 `android::classifyLocation(path, filesDir, externalFilesDir, treeUri, removable)` →

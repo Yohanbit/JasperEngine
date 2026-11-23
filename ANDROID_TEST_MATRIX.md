@@ -22,11 +22,11 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidImportPreflight` | same | a portrait photo's note; WebP broken vs. converted; a huge photo reduced and an absurd one refused; the renamed duplicate; the project summary; a non-asset | 6 |
 
-| `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path | 5 |
+| `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path; two models' `common.png`; the rewritten document; same-leaf numbering; a data: URI kept; a legal sidecar name | 10 |
 
 | `AndroidImportTransfer` | same | the temporary's shape and mapping, resume, an already-complete partial, a partial longer than its source, a full volume, interrupted vs cancelled, a provider with no size, retry-of-a-retry | 10 |
 
-Total: **70 cases, 70 pass, 0 skipped, 0 disabled.**
+Total: **75 cases, 75 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -117,6 +117,16 @@ not repeated here.
 | `ARetryOfARetryKeepsOneSuffix` | **fuzz**: `.x.jeimport` planned `.x.jeimport.jeimport`, unrecoverable |
 | `EveryPlanWritesSomethingTheScannerCanRecover` | **fuzz**: `"dir/"` and `""` produced `..jeimport`; and the target must equal what the temporary maps back to |
 
+### The flat-folder plan (one real defect found by a test)
+
+| Case | What it pins |
+| --- | --- |
+| `ATwoModelProjectCannotLoseOneModelSCommonPngToTheOther` | Body/ and Head/ both ship `common.png` → four distinct assets |
+| `TheDocumentIsRewrittenToNameTheFilesTheImportActuallyCreates` | the `.gltf` no longer names `textures/skin.png` |
+| `TwoFilesWithTheSameLeafInDifferentFoldersAreNumbered` | `a/skin.png` and `b/skin.png` |
+| `ADataUriIsLeftAloneAndAMalformedDocumentChangesNothing` | an inline image keeps its bytes; a broken document is untouched |
+| `TheModelNamePrefixIsALegalAssetName` | `12 Head:Body.gltf` + `My Skin (1).PNG` → `_12_head_body_my_skin_1.png` (**red**: the extension stayed `.PNG`, which Android's case-sensitive volumes and the lowercase type table disagree on) |
+
 ### The double-include guard
 
 The suite includes `AndroidAssetImport.h`, `AndroidImageLimits.h`, `AndroidImageOrientation.h` and
@@ -167,8 +177,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 70 tests from 9 test suites ran. (0 ms total)
-[  PASSED  ] 70 tests.
+[==========] 75 tests from 9 test suites ran. (0 ms total)
+[  PASSED  ] 75 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is

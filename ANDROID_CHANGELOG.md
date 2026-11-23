@@ -87,6 +87,13 @@ with no device to run it on.
   10 cases, 70 total. Three defects found by the fuzzer (a doubled suffix, `..jeimport`, and a target
   that disagreed with the temporary's mapping).
 
+### `planModelImport` + the report's sidecar names (`73a03fec`, `3852700b`)
+
+- A `.gltf` and its files landing in one flat folder: `<model>_<leaf>` names, numbered collisions,
+  and the document itself rewritten so it names what the import creates. Two models' `common.png`
+  stopped overwriting each other. 5 cases, 75 total.
+- The report prints the pairs: `Body.bin -> body_body.bin, textures/common.png -> body_common.png`.
+
 ## Still not done
 
 - Nothing here has run on a phone, an emulator or an APK: no SDK, no NDK, no `javac`, no Docker in
