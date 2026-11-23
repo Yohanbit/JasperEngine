@@ -47,6 +47,7 @@ headers added here follow it exactly, which also means:
 
 | # | Question | Answer (evidence) | Label |
 | --- | --- | --- | --- |
+| 0d | Can a .gltf be imported on a phone? | Not on its own: buffers/images are relative URIs resolved through tinygltf's fs callbacks against the .gltf's directory (`MeshSystem.cpp:2116`), and a picker gives one `content://` per file with no directory. GLB is self-contained | verified (read + `tiny_gltf.h:3297`) |
 | 0c | Could the existing checks answer "will my project work on this phone"? | No: each answers one file and one question. Nothing composed them, and the failure modes the composition finds are exactly the ones a desktop never shows (accepted-then-undecodable WebP, a 183 MB decode, a sideways photo, a silently renamed duplicate) | verified (the report's first run, 4 tests red) |
 | 0b | Does anything read EXIF? | No: `grep -ri exif engine/core/texture` is empty and `TextureData` offers `flipVertical` only, so a portrait phone photo lands sideways with its width and height swapped | verified (grep + `TextureData.h:149`) |
 | 0 | What does the engine decode, really? | stb_image (PNG, JPEG, BMP, TGA, GIF, PSD, PNM, HDR, PIC; **no WebP, no HEIC/AVIF**), own KTX2/Basis path, SVG, tinyexr; SoLoud's dr_wav/dr_mp3/dr_flac/stb_vorbis. A phone shares photos as WebP and iPhone photos as HEIC | verified (grep + `stb_image.h` feature list + `soloud/src/audiosource/wav/`) |
@@ -59,8 +60,8 @@ headers added here follow it exactly, which also means:
 
 ## 3. Implemented (this branch)
 
-All eight (seven headers) are free of Android headers, no new build wiring, C++20,
-`-Wall -Wextra -Werror` clean on GCC 12, and **44 gtest cases passing**. Every header is included
+All nine (eight headers) are free of Android headers, no new build wiring, C++20,
+`-Wall -Wextra -Werror` clean on GCC 12, and **51 gtest cases passing**. Every header is included
 twice by the suite on purpose (see bug 10d). See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
 

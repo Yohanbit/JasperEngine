@@ -22,7 +22,9 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidImportPreflight` | same | a portrait photo's note; WebP broken vs. converted; a huge photo reduced and an absurd one refused; the renamed duplicate; the project summary; a non-asset | 6 |
 
-Total: **44 cases, 44 pass, 0 skipped, 0 disabled.**
+| `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path | 5 |
+
+Total: **51 cases, 51 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -80,6 +82,14 @@ not repeated here.
 | `AndroidImportPreflight.TheWholeProjectGetsOneLineThatNamesTheFirstThingToFix` | four files, one broken; summary names `broken.webp`; an upright photo and an mp3 are Fine | pass |
 | `AndroidImportPreflight.AFileThatIsNotAnAssetIsCopiedAndNotReportedAsBroken` | `docs/readme.md` → Fine, "copied as it is" | pass |
 
+| `AndroidModelSidecars.AGltfNamesTheFilesAPhoneCannotBringAlong` | 1 buffer + 2 images (one named twice) → 2 files to bring, "1 buffer file and 2 texture files" | pass |
+| `AndroidModelSidecars.AGlbOrACookedGltfNeedsNothingElse` | no buffers; a URI-less buffer + `bufferView` image; a `data:` URI | pass |
+| `AndroidModelSidecars.AnEmptyUriIsNotAFileToBring` | `{"uri": ""}` → nothing to bring | pass (**found by fuzzing**: it listed a nameless file) |
+| `AndroidModelSidecars.AMalformedGltfSaysSoInsteadOfClaimingNoDependencies` | `{"buffers":[` → unparsed, with a reason | pass |
+| `AndroidModelSidecars.AUriIsNotAPath` | `%20` decoded (agreeing with `uriFileName`), query/fragment cut, `\\` as a separator | pass (**red**: it left `skin%20map.png` encoded) |
+| `AndroidImportPreflight.AGltfThatNeedsItsBuffersIsANote...` | a .gltf with a buffer and an image → Note, 2 `missingSidecars`; a non-JSON .gltf → Broken | pass |
+| `AndroidImportPreflight.AGlbIsOneFileAndNothingToSay` | a GLB → Fine, no message | pass |
+
 ### The double-include guard
 
 The suite includes `AndroidAssetImport.h`, `AndroidImageLimits.h`, `AndroidImageOrientation.h` and
@@ -98,6 +108,10 @@ fixtures plus 400,000 random buffers — 1 in 7 behind a PNG magic, 1 in 11 behi
 ```
 ok: 400209 inputs, no out-of-bounds read and no impossible size
 ```
+
+The fifth run also parses JSON-shaped noise (and raw noise) through `gltfSidecars`, aborting if a
+parsed model yields an empty required file name or an unparseable one carries no reason — which is
+how the `{"uri": ""}` defect above was found.
 
 The fourth run drives `preflightOne` with a hostile file name built from the same bytes (separators,
 colons, a NUL, empty, 300 bytes) and aborts if any finding cannot name itself or a broken one has no
@@ -118,8 +132,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 44 tests from 7 test suites ran. (0 ms total)
-[  PASSED  ] 44 tests.
+[==========] 51 tests from 8 test suites ran. (0 ms total)
+[  PASSED  ] 51 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
