@@ -285,7 +285,13 @@ namespace {
 
     // runs the calls in a one-shot headless editor on the scratch project; the result envelopes
     bool runBatch(const char* executable, const Scratch& s, std::vector<Json>& results, std::string& error) {
-#if !defined(_WIN32)
+#if defined(__ANDROID__)
+        // `batch` spawns a headless editor, and an Android app cannot start a process: the title
+        // library is built by the desktop editor, not on the phone (see ANDROID_PARITY_MATRIX.md)
+        (void)executable; (void)s; (void)results;
+        error = "the title library is built by the desktop editor: Android cannot start a process";
+        return false;
+#elif !defined(_WIN32)
         // the editor (spawned by `batch`) inherits it: compiled shaders survive the run
         const std::string mesaCache = mesaShaderCacheDir(std::getenv("MESA_SHADER_CACHE_DIR"), std::getenv("XDG_CACHE_HOME"), std::getenv("HOME"));
         if (!mesaCache.empty()) setenv("MESA_SHADER_CACHE_DIR", mesaCache.c_str(), 0);

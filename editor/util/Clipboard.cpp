@@ -8,7 +8,9 @@
 #include <cctype>
 #include <filesystem>
 
-#ifdef JASPERENGINE_HAS_X11_CLIPBOARD
+// (X11_FOUND on the build machine decides this; an Android build never has it, and bionic has no
+// dlfcn.h -- the symbols are in libdl, the header is not there)
+#if defined(JASPERENGINE_HAS_X11_CLIPBOARD) && !defined(__ANDROID__)
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 
@@ -140,7 +142,7 @@ std::vector<std::string> clipboardTextToFilePaths(const char* clipboardText) {
     return parseFileUriList(clipboardText);
 }
 
-#ifdef JASPERENGINE_HAS_X11_CLIPBOARD
+#if defined(JASPERENGINE_HAS_X11_CLIPBOARD) && !defined(__ANDROID__)
 namespace {
 
 constexpr auto kClipboardTimeout = std::chrono::milliseconds(500);
@@ -334,7 +336,7 @@ ClipboardContent readClipboardContentX11() {
 }
 
 } // namespace
-#endif // JASPERENGINE_HAS_X11_CLIPBOARD
+#endif // JASPERENGINE_HAS_X11_CLIPBOARD && !__ANDROID__
 
 #ifdef _WIN32
 namespace {
@@ -474,7 +476,7 @@ ClipboardContent readClipboardContentWin32() {
 #endif // _WIN32
 
 ClipboardContent readClipboardContent() {
-#if defined(JASPERENGINE_HAS_X11_CLIPBOARD)
+#if defined(JASPERENGINE_HAS_X11_CLIPBOARD) && !defined(__ANDROID__)
     return readClipboardContentX11();
 #elif defined(_WIN32)
     return readClipboardContentWin32();

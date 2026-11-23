@@ -59,6 +59,14 @@ std::filesystem::path userConfigDirectory() {
     if (const char* home = std::getenv("HOME"); home && *home) {
         return std::filesystem::path(home) / "Library" / "Application Support" / "JasperEngine";
     }
+#elif defined(__ANDROID__)
+    // A phone has neither APPDATA nor XDG_CONFIG_HOME, and current_path() there is "/", which an
+    // app may not write. The activity's own files directory is what Android gives an app for this;
+    // BackendAndroid sets JASPERENGINE_ANDROID_CONFIG_DIR to its absolute path before anything
+    // reads a setting, since only Java can ask for it.
+    if (const char* config = std::getenv("JASPERENGINE_ANDROID_CONFIG_DIR"); config && *config) {
+        return std::filesystem::path(config);
+    }
 #else
     if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) {
         return std::filesystem::path(xdg) / "jasperengine";

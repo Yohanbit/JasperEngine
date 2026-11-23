@@ -243,6 +243,16 @@ ProcessResult runProcess(const ProcessSpec& spec) {
         result.spawnError = "not an absolute executable path: " + spec.exe.string();
         return result;
     }
+#if defined(__ANDROID__)
+    // bionic declares posix_spawn's types but implements none of its functions, and an Android
+    // app may not exec anyway: its sandbox has no git and no compilers to run. Every caller here
+    // is the version control panel, which reports spawnFailed to the user instead of crashing.
+    // (editor/util/CommandRunner.cpp takes the same route for the same reason.) This returns
+    // before any of the child's buffers exist, so nothing here is left unused under -Werror.
+    result.spawnFailed = true;
+    result.spawnError = "Android cannot start external processes: " + spec.exe.string();
+    return result;
+#else
     countSpawn();
     SigpipeGuard sigpipe;
 
@@ -443,6 +453,7 @@ ProcessResult runProcess(const ProcessSpec& spec) {
     else if (WIFSIGNALED(status)) result.exitCode = 128 + WTERMSIG(status);
     result.truncated = sink.truncated;
     return result;
+#endif // __ANDROID__
 }
 
 #else // _WIN32
@@ -905,6 +916,12 @@ bool ProcessStream::start(const ProcessSpec& spec, Callbacks callbacks, std::str
         error = "not an absolute executable path: " + spec.exe.string();
         return false;
     }
+#if defined(__ANDROID__)
+    // The same reason as runProcess above: bionic has none of posix_spawn's functions, and an
+    // Android app cannot exec. The stream reports it as a failed start.
+    error = "Android cannot start external processes: " + spec.exe.string();
+    return false;
+#else
     (jobs::isMainThread() ? mainThreadSpawns : otherThreadSpawns)++;
     const std::string exe = spec.exe.string();
     std::vector<std::string> argStorage{exe};
@@ -996,6 +1013,7 @@ bool ProcessStream::start(const ProcessSpec& spec, Callbacks callbacks, std::str
         s->readerDone = true;
     });
     return true;
+#endif // __ANDROID__
 }
 
 bool ProcessStream::writeStdin(const void* data, size_t size) {

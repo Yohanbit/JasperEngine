@@ -47,6 +47,9 @@
         #endif
         #include <windows.h>
         #include <GL/gl.h>
+    #elif defined(__ANDROID__)
+        // Android has no desktop GL: its GL is OpenGL ES
+        #include <GLES3/gl3.h>
     #else
         #define GL_GLEXT_PROTOTYPES
         #include <GL/gl.h>
@@ -151,6 +154,8 @@ static bool readRenderPixels(FramebufferRender& render, unsigned int textureWidt
     }
     // (OpenGL and D3D11 read a whole texture another way; Vulkan and Metal copy the rect alike)
     [[maybe_unused]] const bool whole = x == 0 && y == 0 && width == textureWidth && height == textureHeight;
+    // OpenGL ES has no glGetTexImage at all, so on Android every readback -- the whole texture or
+    // a rect of it -- goes through the framebuffer path below, which ES fully supports.
 
     #if defined(SOKOL_GLCORE) || defined(SOKOL_GLES3)
         // OpenGL
@@ -161,6 +166,7 @@ static bool readRenderPixels(FramebufferRender& render, unsigned int textureWidt
         // wait for them, Mesa's llvmpipe (the headless editor's driver) did not always (p4-gaps)
         glFinish();
         const GlFramebufferCalls& fbo = glFramebufferCalls();
+    #if !defined(__ANDROID__)
         if (whole || !fbo.available()) {
             std::vector<uint8_t> all;
             uint8_t* target = pixels;
@@ -174,7 +180,9 @@ static bool readRenderPixels(FramebufferRender& render, unsigned int textureWidt
             for (unsigned int row = 0; !whole && row < height; row++) {
                 std::memcpy(pixels + (size_t)row * width * 4, all.data() + ((size_t)(y + row) * textureWidth + x) * 4, (size_t)width * 4);
             }
-        } else {
+        } else
+    #endif
+        {
             // a part (the eyedropper's texel): the texture on a framebuffer of its own, rows in
             // the texture's order (row y of the texture is y here as in glGetTexImage)
             GLint previousRead = 0;

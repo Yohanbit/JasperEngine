@@ -449,7 +449,14 @@ bool editor::Platform::launchDetached(const std::vector<std::string>& argv, std:
         if (error) *error = "nothing to run";
         return false;
     }
-#if defined(_WIN32)
+#if defined(__ANDROID__)
+    // Android forbids exec of anything the app did not ship: an app has no shell, no xdg-open and
+    // no external tool it may start. The actions that use this (opening a file with a system
+    // handler, an external code editor, Aseprite) report it instead of pretending to have run.
+    (void)argv;
+    if (error) *error = "Android apps cannot launch other programs";
+    return false;
+#elif defined(_WIN32)
     std::wstring commandLine;
     for (const std::string& argument : argv) {
         if (!commandLine.empty()) commandLine += L' ';

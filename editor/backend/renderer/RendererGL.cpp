@@ -64,7 +64,15 @@ bool Renderer::init(const RendererPlatform& platform, int, int, bool synchronize
         }
     }
     updateTarget(0, 0, synchronized);
-    if (!ImGui_ImplOpenGL3_Init("#version 410")){
+    // GLSL ES 3.00 under an ES 3.0 context is what an Android device compiles; the desktop GL
+    // backends ask for 4.10 core. An empty string leaves ImGui's own default for its branch,
+    // which is exactly these two.
+    #if defined(IMGUI_IMPL_OPENGL_ES3)
+    const char* glslVersion = "#version 300 es";
+    #else
+    const char* glslVersion = "#version 410";
+    #endif
+    if (!ImGui_ImplOpenGL3_Init(glslVersion)){
         return false;
     }
 

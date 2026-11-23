@@ -21,13 +21,25 @@ import com.jaspergameengine.bridge.JasperNative;
 
 public class MainActivity extends GameActivity {
 
-	// Load our native library:
+	// Load our native library. A failure is recorded instead of thrown from the static initializer:
+	// onCreate then installs JasperBootLog, whose crash handler writes the reason to Downloads (a
+	// class whose initializer throws never reaches onCreate at all).
+	private static volatile Throwable libraryLoadError;
+
 	static {
-		System.loadLibrary("jasperengine-android");
+		try {
+			System.loadLibrary("jasperengine-android");
+		} catch (Throwable t) {
+			libraryLoadError = t;
+		}
 	}
 
 	private UserSettings userSettings;
 	private ClipboardManager clipboard;
+
+	private boolean isDebuggable() {
+		return (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+	}
 
 	private native void onBackPressedNative();
 
@@ -70,6 +82,14 @@ public class MainActivity extends GameActivity {
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
+		// What the start did, in Downloads/jasperengine-boot.txt (debug builds): a phone has no adb
+		// here. First, so a failure inside the engine's own start is on file too.
+		if (isDebuggable()) JasperBootLog.install(this);
+		// the library could not load: report it and stop here, where the system shows its dialog
+		if (libraryLoadError != null) {
+			if (isDebuggable()) JasperBootLog.dump("library load failed: " + libraryLoadError, libraryLoadError);
+			throw new RuntimeException("jasperengine-android did not load: " + libraryLoadError, libraryLoadError);
+		}
 		if (metaFlag("jasperengine.keepScreenOn", false)) getWindow().addFlags(LayoutParams.FLAG_KEEP_SCREEN_ON);
 		// When true, the app will fit inside any system UI windows.
 		// When false, we render behind any system UI windows.
@@ -95,6 +115,21 @@ public class MainActivity extends GameActivity {
 
 		// native plugins: their onJasperInit, then the lifecycle listeners (JasperNative)
 		JasperNative.dispatchInit(this, savedInstanceState);
+
+		// Debug builds: a long press on the screen's left edge shares the boot report (JasperBootLog).
+		// The engine's own input runs on its thread and never sees the splash, so this stays reachable
+		// while a boot that never drew keeps the app on it.
+		if (isDebuggable()) installBootLogGesture();
+	}
+
+	private void installBootLogGesture() {
+		final View root = getWindow().getDecorView();
+		root.setOnLongClickListener(v -> {
+			Intent share = JasperBootLog.shareIntent();
+			if (share == null) return false;
+			startActivity(share);
+			return true;
+		});
 	}
 
 	// The lifecycle reaches native plugins' listeners after the activity's own handling
@@ -124,6 +159,10 @@ public class MainActivity extends GameActivity {
 	protected void onStop() {
 		super.onStop();
 		JasperNative.dispatchStop();
+		// Leaving the app is the reliable moment to write the report: the user opens it, waits on the
+		// splash, presses Home, and Downloads/jasperengine-boot.txt is there. On a worker thread: the
+		// dump reads logcat, which must not block the UI.
+		if (isDebuggable()) JasperBootLog.dumpAsync("activity stopped");
 	}
 
 	@Override
