@@ -9,9 +9,7 @@
 #include "hub/ProjectImporter.h"
 
 #include "hub/HubPaths.h"
-#if defined(__ANDROID__)
 #include "AndroidImportPreflight.h"
-#endif
 #include "System.h"
 #include "hub/StagingFolders.h"
 #include "vcs/ProcessExec.h"
@@ -128,7 +126,6 @@ bool importer::extractZip(const fs::path& zip, const fs::path& destination, cons
             return false;
         }
     }
-#if defined(__ANDROID__)
     // The device's own report on what it is about to receive, before a byte is written: an image
     // larger than the phone's texture budget, an audio container only MediaCodec can play, a .gltf
     // whose sidecars are not all in the archive. The rules and their sentences are
@@ -166,7 +163,6 @@ bool importer::extractZip(const fs::path& zip, const fs::path& destination, cons
             progress(-1.0f, "the textures in this project need more memory than this device has for them");
         }
     }
-#endif
 
     fs::create_directories(destination, ec);
     if (ec) {

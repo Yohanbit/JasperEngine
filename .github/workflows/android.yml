@@ -143,9 +143,25 @@ jobs:
         run: |
           # -x so the failing line of tools/build.sh is in the log even when it printed nothing
           set +e
+          # PS4 puts a `+` before every traced command, including the ones whose output goes to
+          # stderr (docker's and the container's). Without it, a lane that fails before it writes a
+          # log leaves nothing but `+ [[ android == android ]]` lines to read.
+          export PS4='+ '
           tools/ci/logged.sh android-build "bash -x tools/build.sh android"
           status=$?
           echo "build.sh exited $status"
+          # the last lines of the build, as an annotation of this step: the artifact and job log
+          # downloads both go through a host a session outside this runner cannot reach, so this is
+          # the only place the failure can be read from outside
+          if [[ $status -ne 0 ]]; then
+            for log in build/android/gradle.log build/test-results/android-build.log; do
+              [[ -s "$log" ]] || continue
+              tail -n 8 "$log" 2>&1 | while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                printf '::error::[apk %s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+              done
+            done
+          fi
           exit $status
 
       # -- the editor's APK (com.jaspergameengine.editor): the repository's own CMake tree with
@@ -198,10 +214,12 @@ jobs:
             # silently, so whatever is emitted last is what nobody sees -- and the last lines of a
             # build log are the ones that say why. (Emitting the pattern matches first meant a run
             # whose log ended mid-startup showed only `+ [[ android == android ]]`.)
+            # 2>&1 on the tail: logged.sh keeps stdout and stderr in one file, but the escaping
+            # below is what carries a line into an annotation, so they are merged here regardless
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               printf '::error::[%s …] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-            done < <(tail -n 12 "$log")
+            done < <(tail -n 12 "$log" 2>&1)
 
             # then the errors the patterns name, which is what a build is usually fixed by
             while IFS= read -r line; do

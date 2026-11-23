@@ -315,6 +315,56 @@ TEST(ZipImport, AVolumeWithRoomImportsNormally) {
     EXPECT_TRUE(fs::exists(parent / "Game" / "project.yaml"));
 }
 
+// The preflight the import runs over an archive it has open: a phone is told what a file will do
+// there before the import starts, and nothing is refused because of it. Reached here with a crafted
+// ZIP, because the preflight reads the entry prefixes extractZip already has.
+TEST(ZipImport, APreflightNoteIsLoggedAndTheImportStillHappens) {
+    TestTempDir dir("zip-preflight");
+    const fs::path parent = dir.path() / "Projects";
+    fs::create_directories(parent);
+    const fs::path zip = dir.path() / "Game.zip";
+
+    // a 20000x20000 PNG header (bigger than any phone's 4096 texture), and a sound file that is not
+    // a WAV the engine can decode on its own
+    std::string png(8, '\0');
+    const unsigned char signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    png.assign(reinterpret_cast<const char*>(signature), 8);
+    auto be32 = [](std::string& out, uint32_t value) {
+        out.push_back(static_cast<char>((value >> 24) & 0xFF));
+        out.push_back(static_cast<char>((value >> 16) & 0xFF));
+        out.push_back(static_cast<char>((value >> 8) & 0xFF));
+        out.push_back(static_cast<char>(value & 0xFF));
+    };
+    be32(png, 13); png += "IHDR";
+    be32(png, 20000); be32(png, 20000);
+    png.push_back(8); png.push_back(6); png.push_back(0); png.push_back(0); png.push_back(0);
+    be32(png, 0);
+
+    writeZip(zip, {{"Game/project.yaml", "name: Game\n"}, {"Game/assets/huge.png", png},
+                   {"Game/assets/sound.ogg", "OggS" + std::string(64, '\0')}});
+
+    std::vector<std::string> notes;
+    auto progress = [&notes](float, const std::string& line) {
+        if (!line.empty()) notes.push_back(line);
+        return true;
+    };
+    fs::path projectDir;
+    std::string error;
+    ASSERT_TRUE(importer::importZip(zip, parent, ZipLimits(), progress, projectDir, error)) << error;
+
+    // the import happened, and the files are there
+    EXPECT_TRUE(fs::exists(projectDir / "assets" / "huge.png"));
+    EXPECT_TRUE(fs::exists(projectDir / "assets" / "sound.ogg"));
+
+    // and the phone-specific facts were said
+    bool mentionsImage = false;
+    for (const std::string& note : notes) {
+        if (note.find("huge.png") != std::string::npos) mentionsImage = true;
+    }
+    EXPECT_TRUE(mentionsImage) << "no note about the oversized image; notes were:\n"
+                               << [&notes] { std::string all; for (auto& n : notes) all += "  " + n + "\n"; return all; }();
+}
+
 TEST(ZipImport, RefusedArchivesLeaveNothing) {
     TestTempDir dir("zip-refused");
     const fs::path parent = dir.path() / "Projects";
