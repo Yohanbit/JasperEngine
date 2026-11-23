@@ -243,6 +243,17 @@ ProcessResult runProcess(const ProcessSpec& spec) {
         result.spawnError = "not an absolute executable path: " + spec.exe.string();
         return result;
     }
+#if defined(__ANDROID__)
+    // bionic declares posix_spawn's types but implements none of its functions, and an Android
+    // app may not exec anyway: its sandbox has no git and no compilers to run. Every caller here
+    // is the version control panel, which reports spawnFailed to the user instead of crashing.
+    // (editor/util/CommandRunner.cpp takes the same route for the same reason.) This returns
+    // before any of the child's buffers exist, so nothing here is left unused under -Werror.
+    result.spawnFailed = true;
+    result.spawnError = "Android cannot start external processes: " + spec.exe.string();
+    return result;
+#endif
+
     countSpawn();
     SigpipeGuard sigpipe;
 

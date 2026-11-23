@@ -111,7 +111,13 @@ jobs:
           fi
           # absolute: this step cd's, and a relative redirect would land elsewhere or fail
           log="$GITHUB_WORKSPACE/build/test-results/android-editor.log"
-          CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee "$log"
+          # Only when it is on the runner. Gradle hands this to CMake, which puts it in front of
+          # every compiler invocation including CMake's own test program; a launcher that is not
+          # installed then fails the configure itself, with "ccache: not found", before a single
+          # editor source is read. The image lanes install it; this runner may not have it.
+          launcher=""
+          if command -v ccache > /dev/null; then launcher="CMAKE_CXX_COMPILER_LAUNCHER=ccache"; fi
+          env $launcher ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           apk=editor/build/outputs/apk/debug/editor-debug.apk
           if [[ -f $apk ]]; then cp "$apk" "$GITHUB_WORKSPACE/build/android/jasperengine-editor.apk"; fi
