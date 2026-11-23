@@ -1853,6 +1853,15 @@ function(configure_jasperengine_editor_target target_name)
         woff2_decoder
     )
 
+    if(API_BACKEND STREQUAL "android")
+        # The static libraries are searched left to right, so libjasperengine.a's own GL and EGL
+        # references are only known after it is named: GLESv3 and EGL in BACKEND_LIBS above were
+        # already passed by then and nothing pulled them in, and every symbol the engine's sokol
+        # uses (glGetIntegerv, glCreateProgram, eglGetProcAddress, ...) went unresolved in the
+        # editor's .so. Naming them again after the engine is what fixes the order.
+        target_link_libraries(${target_name} PRIVATE EGL GLESv3)
+    endif()
+
     if(WIN32)
         # dbghelp resolves the crash-report backtrace; ws2_32 is the MCP HTTP server's Winsock;
         # dwrite lists the system fonts (editor/titleart/fonts/SystemFontList.cpp).
