@@ -1193,3 +1193,126 @@ TEST(AndroidImportPreflight, AProjectInsideItsBudgetSaysNothingAboutMemory) {
     EXPECT_TRUE(report.summary.empty());
     EXPECT_EQ(report.residentTextureBytes, 2ull * 256ull * 256ull * 4ull);
 }
+
+// ---- taps and long presses
+
+namespace {
+
+    Touch heldFinger(int pointer, float x, float y, float seconds, TouchPhase phase = TouchPhase::STATIONARY) {
+        Touch touch;
+        touch.pointer = pointer;
+        touch.position = Vector2(x, y);
+        touch.startPosition = Vector2(x, y);
+        touch.phase = phase;
+        touch.time = seconds;
+        return touch;
+    }
+
+    Touch movedFinger(int pointer, float startX, float startY, float x, float y, float seconds) {
+        Touch touch = heldFinger(pointer, x, y, seconds);
+        touch.startPosition = Vector2(startX, startY);
+        return touch;
+    }
+
+}
+
+TEST(AndroidTouchGestures, AFingerHeldStillForHalfASecondIsALongPressOnce) {
+    RecognizerState state;
+    // down, and still down 100 ms and 400 ms later: nothing yet
+    updateLongPress(state, {heldFinger(0, 100, 100, 0.0f, TouchPhase::BEGAN)}, 0.0f);
+    EXPECT_FALSE(state.longPress.triggered);
+    updateLongPress(state, {heldFinger(0, 100, 100, 0.4f)}, 0.4f);
+    EXPECT_FALSE(state.longPress.triggered);
+
+    // at 500 ms it fires, and only on that frame
+    updateLongPress(state, {heldFinger(0, 100, 100, 0.5f)}, 0.5f);
+    EXPECT_TRUE(state.longPress.triggered);
+    EXPECT_EQ(state.longPress.pointer, 0);
+    EXPECT_FLOAT_EQ(state.longPress.position.x, 100.0f);
+    updateLongPress(state, {heldFinger(0, 100, 100, 0.6f)}, 0.6f);
+    EXPECT_FALSE(state.longPress.triggered) << "a menu opens once, not every frame";
+
+    // lifting it is not a tap: the menu it opened must not also be closed by it
+    Touch lift = heldFinger(0, 100, 100, 0.7f, TouchPhase::ENDED);
+    updateLongPress(state, {lift}, 0.7f);
+    updateTap(state, {lift});
+    EXPECT_FALSE(state.tap.tapped);
+}
+
+TEST(AndroidTouchGestures, MovingOrLiftingEarlyIsNotALongPress) {
+    RecognizerState state;
+    updateLongPress(state, {heldFinger(0, 100, 100, 0.0f, TouchPhase::BEGAN)}, 0.0f);
+    EXPECT_EQ(state.longPress.pointer, 0);
+
+    // the finger goes for a walk before the time: it is a drag, and the press is over
+    updateLongPress(state, {movedFinger(0, 100, 100, 160, 100, 0.2f)}, 0.2f);
+    EXPECT_EQ(state.longPress.pointer, -1);
+    updateLongPress(state, {movedFinger(0, 100, 100, 160, 100, 0.9f)}, 0.9f);
+    EXPECT_FALSE(state.longPress.triggered);
+
+    // a second press, lifted before the time, is a tap
+    RecognizerState tapped;
+    updateLongPress(tapped, {heldFinger(0, 50, 50, 0.0f, TouchPhase::BEGAN)}, 0.0f);
+    Touch lift = heldFinger(0, 50, 50, 0.1f, TouchPhase::ENDED);
+    updateLongPress(tapped, {lift}, 0.1f);
+    EXPECT_FALSE(tapped.longPress.triggered);
+    updateTap(tapped, {lift});
+    EXPECT_TRUE(tapped.tap.tapped);
+    EXPECT_FLOAT_EQ(tapped.tap.position.x, 50.0f);
+}
+
+TEST(AndroidTouchGestures, TwoFingersAreAPinchAndNotALongPress) {
+    RecognizerState state;
+    updateLongPress(state, {heldFinger(0, 100, 100, 0.0f, TouchPhase::BEGAN),
+                            heldFinger(1, 300, 100, 0.0f, TouchPhase::BEGAN)}, 0.0f);
+    EXPECT_EQ(state.longPress.pointer, -1) << "a two-finger hold zooms nothing and opens nothing";
+    updateLongPress(state, {heldFinger(0, 100, 100, 1.0f), heldFinger(1, 300, 100, 1.0f)}, 1.0f);
+    EXPECT_FALSE(state.longPress.triggered);
+}
+
+TEST(AndroidTouchGestures, TwoQuickTapsInTheSamePlaceAreADoubleTapAndTheNextOneStartsOver) {
+    RecognizerState state;
+    TapOptions options;
+    Touch first = heldFinger(0, 200, 200, 0.05f, TouchPhase::ENDED);
+    updateTap(state, {first}, options);
+    EXPECT_TRUE(state.tap.tapped);
+    EXPECT_FALSE(state.tap.doubleTapped);
+    EXPECT_FLOAT_EQ(state.tap.position.x, 200.0f);
+
+    // 200 ms later, 10 px away: a double tap
+    Touch second = heldFinger(0, 210, 205, 0.25f, TouchPhase::ENDED);
+    updateTap(state, {second}, options);
+    EXPECT_TRUE(state.tap.tapped) << "the second tap is still a tap";
+    EXPECT_TRUE(state.tap.doubleTapped);
+    EXPECT_NEAR(state.tap.interval, 0.2f, 0.001f);
+
+    // a third tap 200 ms later is a single tap again: the pair completed
+    Touch third = heldFinger(0, 210, 205, 0.45f, TouchPhase::ENDED);
+    updateTap(state, {third}, options);
+    EXPECT_TRUE(state.tap.tapped);
+    EXPECT_FALSE(state.tap.doubleTapped);
+}
+
+TEST(AndroidTouchGestures, TooSlowOrTooFarIsTwoSingleTaps) {
+    TapOptions options;
+    // 400 ms apart is past the double tap window
+    RecognizerState slow;
+    updateTap(slow, {heldFinger(0, 100, 100, 0.05f, TouchPhase::ENDED)}, options);
+    updateTap(slow, {heldFinger(0, 100, 100, 0.45f, TouchPhase::ENDED)}, options);
+    EXPECT_TRUE(slow.tap.tapped);
+    EXPECT_FALSE(slow.tap.doubleTapped);
+
+    // 300 px apart is a different target
+    RecognizerState far;
+    updateTap(far, {heldFinger(0, 100, 100, 0.05f, TouchPhase::ENDED)}, options);
+    updateTap(far, {heldFinger(0, 400, 100, 0.15f, TouchPhase::ENDED)}, options);
+    EXPECT_FALSE(far.tap.doubleTapped);
+}
+
+TEST(AndroidTouchGestures, ADragIsNotATap) {
+    RecognizerState state;
+    Touch dragged = movedFinger(0, 100, 100, 300, 100, 0.1f);
+    dragged.phase = TouchPhase::ENDED;
+    updateTap(state, {dragged});
+    EXPECT_FALSE(state.tap.tapped) << "a release 200 px from where it started is a drag's end";
+}

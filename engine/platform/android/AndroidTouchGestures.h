@@ -15,7 +15,13 @@
 //  - the two-finger distance and its change since the last frame: a pinch zoom, in pixels;
 //  - the midpoint of two fingers and its movement: panning while pinching;
 //  - the angle between two fingers and its change: a rotation gesture;
-//  - a one-finger drag past a slop, which is not a tap (VNC, a scene view's orbit).
+//  - a one-finger drag past a slop, which is not a tap (VNC, a scene view's orbit);
+//  - a long press: a finger held still for half a second, which is how Android's own UI opens a
+//    context menu, starts a drag and begins text selection. `InputActionAsset` has a `holdTime` for
+//    a *mapped action*, but the UI does not go through InputActions, so a tap on a panel had no
+//    press-and-hold at all;
+//  - the tap and the double tap, decided at release rather than inferred from `Touch::tapCount`,
+//    which only says how many quick taps landed and not whether the finger moved meanwhile.
 //
 // Recognizer holds the state between frames and answers per frame, so a consumer only forwards
 // its touches each frame. It is a plain value: copyable, no allocation after the first frame's
@@ -73,10 +79,56 @@ namespace jasperengine::android {
         int frames = 0;
     };
 
+    // A finger's press followed by a release without moving past the slop: a tap.
+    struct TapState {
+        // true for the one frame the release happened in a tap
+        bool tapped = false;
+        // true for the one frame a *second* tap landed close enough and soon enough to be a double
+        // tap (the first tap's `tapped` still fired: a consumer that only wants double taps ignores
+        // the first and undoes it, which is what every UI toolkit does)
+        bool doubleTapped = false;
+        // where it landed, and which finger
+        Vector2 position;
+        int pointer = -1;
+        // the seconds between the two taps of a double tap (0 on a single tap)
+        float interval = 0.0f;
+    };
+
+    // A finger held still: the press-and-hold every phone UI is driven by.
+    struct LongPressState {
+        // true for the one frame the press became a long press (not every frame it is still held)
+        bool triggered = false;
+        // where the finger is holding and since when
+        Vector2 position;
+        int pointer = -1;
+        float heldSeconds = 0.0f;
+        // the press that became a long press is no longer a tap: `updateTap` will not fire for it
+        bool consumed = false;
+    };
+
+    // How a touch UI's taps and holds are recognised. The thresholds are Android's own
+    // ViewConfiguration defaults (getLongPressTimeout 500 ms, getDoubleTapTimeout 300 ms,
+    // getScaledDoubleTapSlop 100 px at mdpi), so a gesture behaves as the phone's users expect.
+    struct TapOptions {
+        float longPressSeconds = 0.5f;
+        float doubleTapSeconds = 0.3f;
+        // a double tap's second touch must land within this of the first's: Android scales it by
+        // density; a caller with the canvas scale passes its own
+        float doubleTapDistance = 100.0f;
+        // further than this from the start and the finger is dragging, not tapping or holding
+        float slop = 8.0f;
+    };
+
     // The state a Recognizer keeps between frames.
     struct RecognizerState {
         PinchState pinch;
         DragState drag;
+        TapState tap;
+        LongPressState longPress;
+        // the last tap's release, for the double tap's window
+        bool lastTapValid = false;
+        Vector2 lastTapPosition;
+        float lastTapEndTime = 0.0f;
         // fingers read last frame, and the frame number last read
         size_t previousCount = 0;
         int previousFrame = -1;
@@ -90,6 +142,96 @@ namespace jasperengine::android {
             angle = std::fmod(angle + PI, TWO_PI);
             if (angle <= 0.0f) angle += TWO_PI;
             return angle - PI;
+        }
+    }
+
+    // Advances the long press with this frame's touches. A finger that has been down for
+    // `options.longPressSeconds` without moving further than `options.slop` triggers once; moving
+    // further cancels it (the finger became a drag), and so does lifting it before the time.
+    //
+    // `seconds` is the engine's unscaled input time (Input::getInputTime or the touches' own
+    // `time`), so a paused game does not trigger a menu.
+    inline void updateLongPress(RecognizerState& state, const std::vector<Touch>& touches, float seconds, const TapOptions& options = {}) {
+        LongPressState& press = state.longPress;
+        press.triggered = false;
+        if (press.pointer >= 0) {
+            // find the finger that owns the press; it may have lifted (a tap, not a hold)
+            const Touch* owner = nullptr;
+            for (const Touch& touch : touches) {
+                if (touch.pointer == press.pointer) {
+                    owner = &touch;
+                    break;
+                }
+            }
+            if (!owner || owner->phase == TouchPhase::ENDED) {
+                // lifted before the time: not a long press, and still a tap
+                press.pointer = -1;
+                press.heldSeconds = 0.0f;
+                return;
+            }
+            press.position = owner->position;
+            // the held time comes from the touch itself and not from a subtraction against
+            // `seconds`: Touch::time is already the unscaled seconds since this finger went down,
+            // so a caller that passes any monotonic clock cannot make it negative or drift
+            press.heldSeconds = owner->time;
+            (void)seconds;
+            const float moved = (owner->position - owner->startPosition).length();
+            if (moved > options.slop) {
+                press.pointer = -1;   // it is a drag
+                press.heldSeconds = 0.0f;
+                return;
+            }
+            if (!press.consumed && press.heldSeconds >= options.longPressSeconds) {
+                press.triggered = true;
+                press.consumed = true;
+            }
+            return;
+        }
+        // a new press, when exactly one finger is down (two fingers are a pinch, not a hold)
+        if (touches.size() != 1) return;
+        const Touch& only = touches.front();
+        if (only.phase != TouchPhase::BEGAN || (only.position - only.startPosition).length() > options.slop) return;
+        press.pointer = only.pointer;
+        press.position = only.position;
+        press.heldSeconds = only.time;
+        press.consumed = false;
+    }
+
+    // Whether the press that just ended is the one a long press consumed. Kept out of the state
+    // machine so both readers agree on it: the long press records the finger, the tap asks.
+    inline bool pressWasConsumed(const RecognizerState& state, const Vector2& releasePosition, float slop) {
+        if (!state.longPress.consumed) return false;
+        return (state.longPress.position - releasePosition).length() <= slop;
+    }
+
+    // Advances the tap reading with this frame's touches. A release within `options.slop` of where
+    // the finger started is a tap; two of them within `options.doubleTapDistance` and
+    // `options.doubleTapSeconds` is a double tap. A press that became a long press is not a tap.
+    inline void updateTap(RecognizerState& state, const std::vector<Touch>& touches, const TapOptions& options = {}) {
+        TapState& tap = state.tap;
+        tap.tapped = false;
+        tap.doubleTapped = false;
+        for (const Touch& touch : touches) {
+            if (touch.phase != TouchPhase::ENDED) continue;
+            // the press that opened a menu is the one whose long press already fired: lifting it
+            // must not also close the menu a tap would open (the finger has not moved, so a
+            // distance test is what tells them apart)
+            const bool held = pressWasConsumed(state, touch.position, options.slop);
+            if (held) continue;   // the context menu opened here
+            if ((touch.position - touch.startPosition).length() > options.slop) continue;
+            tap.tapped = true;
+            tap.pointer = touch.pointer;
+            tap.position = touch.position;
+            if (state.lastTapValid && touch.time - state.lastTapEndTime <= options.doubleTapSeconds &&
+                (touch.position - state.lastTapPosition).length() <= options.doubleTapDistance) {
+                tap.doubleTapped = true;
+                tap.interval = touch.time - state.lastTapEndTime;
+                state.lastTapValid = false;   // the pair is complete: a third tap starts again
+            } else {
+                state.lastTapValid = true;
+                state.lastTapPosition = touch.position;
+                state.lastTapEndTime = touch.time;
+            }
         }
     }
 
