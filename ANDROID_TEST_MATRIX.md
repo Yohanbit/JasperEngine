@@ -20,7 +20,9 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidImageOrientation` | same | the tag in JPEG and PNG, malformed tags, all eight transforms, swapped sizes | 4 |
 
-Total: **38 cases, 38 pass, 0 skipped, 0 disabled.**
+| `AndroidImportPreflight` | same | a portrait photo's note; WebP broken vs. converted; a huge photo reduced and an absurd one refused; the renamed duplicate; the project summary; a non-asset | 6 |
+
+Total: **44 cases, 44 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -71,6 +73,21 @@ not repeated here.
 | `AndroidImageOrientation.EveryValueHasATransform` | the eight values' rotation and swap, `isUpright` | pass (**red**: 1 was reported as "needs work") |
 | `AndroidImageOrientation.ARotatedPhotoReportsSwappedDimensions` | 4000x3000 + 6 → 3000x4000; a mirror and a 180 do not swap | pass |
 
+| `AndroidImportPreflight.APortraitPhotoSaysHowItIsTurnedAndHowBigADecodeIs` | `DCIM/IMG_4821.JPG` + EXIF 6 → asset `img_4821.jpg`, a Note naming "turned 90 clockwise" | pass (**red**: the path was used as the name) |
+| `AndroidImportPreflight.AWebpIsBrokenWithoutThePlatformDecoderAndANoteWithIt` | no BitmapFactory → Broken; with it → Note "converted to png" | pass (**red**: called a note when nothing converts it) |
+| `AndroidImportPreflight.AHugePhotoIsReducedAndOnePastEveryLimitIsRefused` | 8000x6000 → 4000x3000 at 50%, "183.1 MB" named; 20000x20000 → Broken with its size | pass (**red**: the message said 0.0 MB for every image) |
+| `AndroidImportPreflight.ASecondFileWithTheSameNameIsReportedUnderTheNameItGets` | `downloads/Icon.PNG` over a taken `icon.png` → `icon (1).png` | pass |
+| `AndroidImportPreflight.TheWholeProjectGetsOneLineThatNamesTheFirstThingToFix` | four files, one broken; summary names `broken.webp`; an upright photo and an mp3 are Fine | pass |
+| `AndroidImportPreflight.AFileThatIsNotAnAssetIsCopiedAndNotReportedAsBroken` | `docs/readme.md` → Fine, "copied as it is" | pass |
+
+### The double-include guard
+
+The suite includes `AndroidAssetImport.h`, `AndroidImageLimits.h`, `AndroidImageOrientation.h` and
+`AndroidImportPreflight.h` a second time at the top of the file. This is not redundancy: an `#endif`
+written before a later block redefines the block's enums on the second include, and two appends had
+left `AndroidImageLimits.h` in exactly that state (bug 10d). Without the second include nothing on the
+host compiles a header twice, so nothing could see it.
+
 ### Fuzzing (verified, sanitizers)
 
 `/tmp/fuzz.cpp` (not committed; reproduce below) feeds every truncation of eight real header
@@ -81,6 +98,10 @@ fixtures plus 400,000 random buffers — 1 in 7 behind a PNG magic, 1 in 11 behi
 ```
 ok: 400209 inputs, no out-of-bounds read and no impossible size
 ```
+
+The fourth run drives `preflightOne` with a hostile file name built from the same bytes (separators,
+colons, a NUL, empty, 300 bytes) and aborts if any finding cannot name itself or a broken one has no
+reason. `ok: 400209 inputs`.
 
 The second run also drove `decodeSupportOf`, `playbackSupportOf` and `decideImageImport` over the
 same inputs (the ISO-BMFF path reads bytes 4..7, which is where a truncation bites); the third added
@@ -97,8 +118,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 38 tests from 6 test suites ran. (0 ms total)
-[  PASSED  ] 38 tests.
+[==========] 44 tests from 7 test suites ran. (0 ms total)
+[  PASSED  ] 44 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
