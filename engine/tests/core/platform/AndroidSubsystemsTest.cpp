@@ -528,12 +528,16 @@ TEST(AndroidProjectLayout, RecognizesProjectCachesAndTheImportFolder) {
 namespace {
 
     // a PNG header with the given size and colour type (6: RGBA)
+    // a PNG: the signature and a whole IHDR chunk (length, type, 13 bytes of data, CRC). The CRC
+    // is not checked by the orientation reader, but its four bytes must be there or every chunk
+    // after it is read four bytes early.
     std::vector<uint8_t> pngHeader(uint32_t width, uint32_t height, int colorType, int bitDepth = 8) {
-        std::vector<uint8_t> bytes = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
-                                      0, 0, 0, 13, 'I', 'H', 'D', 'R',
-                                      (uint8_t)(width >> 24), (uint8_t)(width >> 16), (uint8_t)(width >> 8), (uint8_t)width,
-                                      (uint8_t)(height >> 24), (uint8_t)(height >> 16), (uint8_t)(height >> 8), (uint8_t)height,
-                                      (uint8_t)bitDepth, (uint8_t)colorType, 0, 0, 0, 0};
+        std::vector<uint8_t> bytes = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+        const uint8_t chunk[25] = {0, 0, 0, 13, 'I', 'H', 'D', 'R',
+                                   (uint8_t)(width >> 24), (uint8_t)(width >> 16), (uint8_t)(width >> 8), (uint8_t)width,
+                                   (uint8_t)(height >> 24), (uint8_t)(height >> 16), (uint8_t)(height >> 8), (uint8_t)height,
+                                   (uint8_t)bitDepth, (uint8_t)colorType, 0, 0, 0, 0, 0, 0, 0};
+        bytes.insert(bytes.end(), chunk, chunk + sizeof(chunk));
         return bytes;
     }
 
@@ -783,4 +787,155 @@ TEST(AndroidAssetImport, AudioSupportFollowsTheDecoderSet) {
     const MediaSupportAnswer refused = playbackSupportOf("memo.m4a", bytesOf({0, 0, 0, 0x20, 'f', 't', 'y', 'p'}), false);
     EXPECT_EQ(refused.support, MediaSupport::Unsupported);
     EXPECT_NE(refused.reason.find("WAV"), std::string::npos) << refused.reason;
+}
+
+// ---- EXIF orientation
+
+#include "AndroidImageOrientation.h"
+
+namespace {
+
+    // a TIFF header (little or big endian) with IFD0 holding one Orientation entry
+    std::vector<uint8_t> tiffWithOrientation(uint16_t value, bool little = true, uint16_t tag = 0x0112) {
+        std::vector<uint8_t> bytes;
+        auto push16 = [&bytes, little](uint16_t v) {
+            if (little) { bytes.push_back((uint8_t)v); bytes.push_back((uint8_t)(v >> 8)); }
+            else { bytes.push_back((uint8_t)(v >> 8)); bytes.push_back((uint8_t)v); }
+        };
+        auto push32 = [&bytes, little](uint32_t v) {
+            if (little) { bytes.push_back((uint8_t)v); bytes.push_back((uint8_t)(v >> 8)); bytes.push_back((uint8_t)(v >> 16)); bytes.push_back((uint8_t)(v >> 24)); }
+            else { bytes.push_back((uint8_t)(v >> 24)); bytes.push_back((uint8_t)(v >> 16)); bytes.push_back((uint8_t)(v >> 8)); bytes.push_back((uint8_t)v); }
+        };
+        bytes.push_back(little ? 'I' : 'M');
+        bytes.push_back(little ? 'I' : 'M');
+        push16(42);
+        push32(8);          // IFD0 at 8
+        push16(1);          // one entry
+        push16(tag);        // tag (0x0112 encodes as 12 01 little endian, 01 12 big)
+        push16(3);          // SHORT
+        push32(1);          // count 1
+        push16(value);      // the value, in the first two bytes of the field
+        push16(0);
+        push32(0);          // no next IFD
+        return bytes;
+    }
+
+    // a JPEG: SOI, an APP1 "Exif" segment around that TIFF, then an SOF0 and a scan
+    std::vector<uint8_t> jpegWithOrientation(uint16_t value, bool little = true) {
+        const std::vector<uint8_t> tiff = tiffWithOrientation(value, little);
+        std::vector<uint8_t> bytes = {0xFF, 0xD8, 0xFF, 0xE1};
+        const uint16_t length = (uint16_t)(2 + 6 + tiff.size());
+        bytes.push_back((uint8_t)(length >> 8));
+        bytes.push_back((uint8_t)length);
+        bytes.insert(bytes.end(), {'E', 'x', 'i', 'f', 0, 0});
+        bytes.insert(bytes.end(), tiff.begin(), tiff.end());
+        const std::vector<uint8_t> sof = {0xFF, 0xC0, 0x00, 0x0B, 8, 0x00, 0x10, 0x00, 0x20, 3, 1, 0x11, 0};
+        bytes.insert(bytes.end(), sof.begin(), sof.end());
+        bytes.insert(bytes.end(), {0xFF, 0xDA, 0x00, 0x02});
+        return bytes;
+    }
+
+    // a PNG: signature, IHDR, an eXIf chunk with the TIFF, IEND
+    std::vector<uint8_t> pngWithOrientation(uint16_t value) {
+        // pngHeader already ends with the IHDR's CRC, so a chunk can follow it directly
+        std::vector<uint8_t> bytes = pngHeader(64, 32, 6);
+        const std::vector<uint8_t> tiff = tiffWithOrientation(value);
+        const uint32_t length = (uint32_t)tiff.size();
+        bytes.push_back((uint8_t)(length >> 24)); bytes.push_back((uint8_t)(length >> 16));
+        bytes.push_back((uint8_t)(length >> 8)); bytes.push_back((uint8_t)length);
+        bytes.insert(bytes.end(), {'e', 'X', 'I', 'f'});
+        bytes.insert(bytes.end(), tiff.begin(), tiff.end());
+        bytes.insert(bytes.end(), {0, 0, 0, 0});     // CRC: not checked here
+        bytes.insert(bytes.end(), {0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xAE, 0x42, 0x60, 0x82});
+        return bytes;
+    }
+
+}
+
+TEST(AndroidImageOrientation, ReadsTheTagFromJpegAndPng) {
+    EXPECT_EQ(readOrientation(jpegWithOrientation(6)), 6u) << "the common portrait phone photo";
+    EXPECT_EQ(readOrientation(jpegWithOrientation(3)), 3u);
+    EXPECT_EQ(readOrientation(jpegWithOrientation(1)), 1u) << "a tag that says upright is still read";
+    // big-endian EXIF (a camera, not a phone)
+    EXPECT_EQ(readOrientation(jpegWithOrientation(8, false)), 8u);
+    EXPECT_EQ(readOrientation(pngWithOrientation(7)), 7u);
+
+    // a screenshot has no EXIF at all
+    EXPECT_EQ(readOrientation(jpegHeader(100, 100, 3)), 0u);
+    EXPECT_EQ(readOrientation(pngHeader(100, 100, 6)), 0u);
+    EXPECT_EQ(readOrientation({}), 0u);
+    EXPECT_EQ(readOrientation(textBytes("RIFF....WEBP")), 0u) << "other formats have no tag here";
+}
+
+TEST(AndroidImageOrientation, AMalformedTagIsIgnoredNotFatal) {
+    // the tag with the wrong type (LONG instead of SHORT)
+    std::vector<uint8_t> wrongType = tiffWithOrientation(6);
+    wrongType[8 + 2 + 2 + 1] = 4;   // type = 4
+    EXPECT_EQ(readOrientation(jpegWithOrientation(6).size() ? [&] {
+        std::vector<uint8_t> bytes = {0xFF, 0xD8, 0xFF, 0xE1};
+        const uint16_t length = (uint16_t)(2 + 6 + wrongType.size());
+        bytes.push_back((uint8_t)(length >> 8));
+        bytes.push_back((uint8_t)length);
+        bytes.insert(bytes.end(), {'E', 'x', 'i', 'f', 0, 0});
+        bytes.insert(bytes.end(), wrongType.begin(), wrongType.end());
+        return bytes;
+    }() : std::vector<uint8_t>()), 0u);
+
+    // an IFD offset past the segment
+    std::vector<uint8_t> badOffset = tiffWithOrientation(6);
+    badOffset[4] = 0xFF; badOffset[5] = 0xFF; badOffset[6] = 0xFF; badOffset[7] = 0x7F;
+    std::vector<uint8_t> jpeg = {0xFF, 0xD8, 0xFF, 0xE1, 0, 0};
+    const uint16_t length = (uint16_t)(2 + 6 + badOffset.size());
+    jpeg[4] = (uint8_t)(length >> 8); jpeg[5] = (uint8_t)length;
+    jpeg.insert(jpeg.end(), {'E', 'x', 'i', 'f', 0, 0});
+    jpeg.insert(jpeg.end(), badOffset.begin(), badOffset.end());
+    EXPECT_EQ(readOrientation(jpeg), 0u);
+
+    // a value outside 1..8
+    EXPECT_EQ(orientationFromValue(9), Orientation::Unknown);
+    EXPECT_EQ(orientationFromValue(0), Orientation::Unknown);
+    EXPECT_EQ(orientationFromValue(1), Orientation::Normal);
+}
+
+TEST(AndroidImageOrientation, EveryValueHasATransform) {
+    // 1 and 2..4 alone need no swap; 5..8 do
+    const bool swap[9] = {false, false, false, false, false, true, true, true, true};
+    const int rotation[9] = {0, 0, 0, 180, 0, 90, 90, 90, 270};
+    const bool needed[9] = {false, false, true, true, true, true, true, true, true};
+    for (uint32_t value = 1; value <= 8; value++) {
+        const OrientationTransform transform = transformFor(orientationFromValue(value));
+        EXPECT_EQ(transform.swapDimensions, swap[value]) << "orientation " << value;
+        EXPECT_EQ(transform.rotateClockwise, rotation[value]) << "orientation " << value;
+        EXPECT_EQ(transform.needed, needed[value]) << "orientation " << value;
+    }
+    // 1 and an absent tag both leave the pixels alone, and isUpright says so
+    EXPECT_TRUE(isUpright(Orientation::Normal));
+    EXPECT_TRUE(isUpright(Orientation::Unknown));
+    EXPECT_FALSE(isUpright(Orientation::Rotate90));
+
+    // 2 is a mirror only, 4 a vertical mirror only, 5 and 7 mirror one way with a rotation
+    EXPECT_TRUE(transformFor(Orientation::MirrorHorizontal).flipHorizontal);
+    EXPECT_EQ(transformFor(Orientation::MirrorHorizontal).rotateClockwise, 0);
+    EXPECT_TRUE(transformFor(Orientation::MirrorVertical).flipVertical);
+    EXPECT_TRUE(transformFor(Orientation::Transpose).flipHorizontal);
+    EXPECT_TRUE(transformFor(Orientation::Transverse).flipVertical);
+}
+
+TEST(AndroidImageOrientation, ARotatedPhotoReportsSwappedDimensions) {
+    // a portrait phone photo is stored 4000x3000 with Orientation 6 and shown 3000x4000
+    const OrientedSize shown = orientedSize(4000, 3000, Orientation::Rotate90);
+    EXPECT_TRUE(shown.swapped);
+    EXPECT_EQ(shown.width, 3000);
+    EXPECT_EQ(shown.height, 4000);
+
+    // a mirror does not change the size
+    const OrientedSize mirrored = orientedSize(4000, 3000, Orientation::MirrorHorizontal);
+    EXPECT_FALSE(mirrored.swapped);
+    EXPECT_EQ(mirrored.width, 4000);
+    EXPECT_EQ(mirrored.height, 3000);
+
+    // and a 180 turn does not either
+    const OrientedSize turned = orientedSize(4000, 3000, Orientation::Rotate180);
+    EXPECT_EQ(turned.width, 4000);
+    EXPECT_EQ(turned.height, 3000);
 }
