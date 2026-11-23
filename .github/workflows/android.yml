@@ -140,7 +140,13 @@ jobs:
           fi
 
       - name: APK
-        run: tools/ci/logged.sh android-build "tools/build.sh android"
+        run: |
+          # -x so the failing line of tools/build.sh is in the log even when it printed nothing
+          set +e
+          tools/ci/logged.sh android-build "bash -x tools/build.sh android"
+          status=$?
+          echo "build.sh exited $status"
+          exit $status
 
       # -- the editor's APK (com.jaspergameengine.editor): the repository's own CMake tree with
       # API_BACKEND=android. Deliberately not a tools/build.sh lane: that script's `android` target
