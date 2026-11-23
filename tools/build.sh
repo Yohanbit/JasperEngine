@@ -856,11 +856,18 @@ android)
         # It lives under .cache and not in build/android because --clean removes $OUT, which for
         # this target is build/android, and the identity must survive that. Absent, the array is
         # empty and the APK is unnamed exactly as before.
-        mapfile -t IDENTITY_ARGS < /src/build/.cache/identity.args 2>/dev/null || IDENTITY_ARGS=()
+        IDENTITY_ARGS=()
+        if [[ -s /src/build/.cache/identity.args ]]; then
+            mapfile -t IDENTITY_ARGS < /src/build/.cache/identity.args || IDENTITY_ARGS=()
+        fi
+        echo "android: identity args: \${#IDENTITY_ARGS[@]} \${IDENTITY_ARGS[*]:-none}" >&2
         # Made here, in the container, immediately before it is written to: the host's mkdir runs
         # before the container starts, and the block failing with "no such file or directory" from
         # tee is a failure nobody can read.
-        mkdir -p "/src/$APK_DIR" || { echo "android: cannot make /src/$APK_DIR" >&2; exit 6; }
+        if ! mkdir -p "/src/$APK_DIR" 2>/dev/null; then
+            echo "android: cannot make /src/$APK_DIR -- it may exist as a file, or the mount is not writable" >&2
+            exit 6
+        fi
         echo 'android: running gradlew'
         env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
         # \$: this string is expanded by the OUTER shell first, and an unescaped \$gradle_status here
