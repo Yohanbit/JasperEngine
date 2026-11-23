@@ -40,13 +40,25 @@
 
 #if defined(SOKOL_GLCORE) || defined(SOKOL_GLES3)
     #ifdef __APPLE__
-        #include <OpenGL/gl.h>
+        #if defined(SOKOL_GLES3)
+            // iOS and the Apple Silicon simulator: the GLES headers, not the desktop ones
+            #ifndef GLES_SILENCE_DEPRECATION
+            #define GLES_SILENCE_DEPRECATION
+            #endif
+            #include <OpenGLES/ES3/gl.h>
+        #else
+            #include <OpenGL/gl.h>
+        #endif
     #elif defined(_WIN32)
         #ifndef NOMINMAX
         #define NOMINMAX
         #endif
         #include <windows.h>
         #include <GL/gl.h>
+    #elif defined(SOKOL_GLES3)
+        // Android and the Linux GLES builds: there is no /usr/include/GL/gl.h in an NDK sysroot
+        // (this is what failed the APK: editor/util/GraphicUtils.cpp:52, 'GL/gl.h' file not found)
+        #include <GLES3/gl3.h>
     #else
         #define GL_GLEXT_PROTOTYPES
         #include <GL/gl.h>

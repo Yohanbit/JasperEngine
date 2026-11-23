@@ -92,7 +92,19 @@
         #include <windows.h>
         #include <GL/gl.h>
     #elif defined(__APPLE__)
-        #include <OpenGL/gl.h>
+        #if defined(SOKOL_GLES3)
+            // iOS and the Apple Silicon simulator: the GLES headers, not the desktop ones
+            #ifndef GLES_SILENCE_DEPRECATION
+            #define GLES_SILENCE_DEPRECATION
+            #endif
+            #include <OpenGLES/ES3/gl.h>
+        #else
+            #include <OpenGL/gl.h>
+        #endif
+    #elif defined(SOKOL_GLES3)
+        // Android and the Linux GLES builds: an NDK sysroot has no GL/gl.h (the sibling include
+        // that failed the APK build in editor/util/GraphicUtils.cpp)
+        #include <GLES3/gl3.h>
     #else
         #include <GL/gl.h>
     #endif
