@@ -6,8 +6,11 @@ flags of its target and no precompiled header (exports, web and Android build wi
     tools/check_headers.py --all                                  # every header it covers
     tools/check_headers.py --self-test
 
-It covers engine/core/ (the flags of a unit of the jasperengine target) and editor/ (of the editor's
-objects), not editor/tests/; anything else given is left out, and said to be. Needs a configured
+It covers engine/core/ and engine/platform/ (the flags of a unit of the jasperengine target) and
+editor/ (of the editor's objects), not editor/tests/; anything else given is left out, and said to be.
+engine/platform/ earns its place: those headers are SDK-free by design (AndroidTextInput.h's pattern,
+and the ANDROID_* subsystem headers), so they must compile on any host -- and one of them closed its
+include guard before its last block for eleven commits, which no other gate could see. Needs a configured
 tree (`tools/build.sh linux`) whose generated headers exist, and the build image (the tree's paths
 are /src/...): tools/check-changed runs it for the headers a change edits. Standard library only.
 """
@@ -27,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TREE = ROOT / "build" / "linux" / "editor"
 HEADER = (".h", ".hh", ".hpp")
 ENGINE_DIR = "engine/core/"
+PLATFORM_DIR = "engine/platform/"
 EDITOR_DIR = "editor/"
 # (a value of its own next to these flags)
 TAKES_VALUE = {"-o", "-MF", "-MT", "-MQ"}
@@ -35,7 +39,12 @@ PCH_MARK = "cmake_pch"
 
 
 def covered(path: str) -> bool:
-    return path.endswith(HEADER) and path.startswith((ENGINE_DIR, EDITOR_DIR)) and not path.startswith("editor/tests/")
+    return path.endswith(HEADER) and path.startswith((ENGINE_DIR, PLATFORM_DIR, EDITOR_DIR)) and not path.startswith("editor/tests/")
+
+
+def engine_flags(path: str) -> bool:
+    """engine/core/ and engine/platform/ are units of the same target, with the same flags."""
+    return path.startswith((ENGINE_DIR, PLATFORM_DIR))
 
 
 def flags_of(command: str, source: str) -> list[str]:
@@ -77,15 +86,17 @@ def target_flags(entries: list[dict]) -> dict[str, tuple[str, list[str]]]:
 
 
 def check_one(path: str, root: Path, flags: dict[str, tuple[str, list[str]]]) -> tuple[str, bool, str]:
-    directory, args = flags[ENGINE_DIR if path.startswith(ENGINE_DIR) else EDITOR_DIR]
-    # (through stdin: a header as the main file warns about its #pragma once)
+    directory, args = flags[ENGINE_DIR if engine_flags(path) else EDITOR_DIR]
+    # (through stdin: a header as the main file warns about its #pragma once). Included **twice**:
+    # a guard that closes before a later block redefines that block, and one include never sees it
     command = [*args, "-fsyntax-only", "-x", "c++", "-"]
-    run = subprocess.run(command, cwd=directory, input=f'#include "{root / path}"\n', capture_output=True, text=True)
+    include = f'#include "{root / path}"\n'
+    run = subprocess.run(command, cwd=directory, input=include * 2, capture_output=True, text=True)
     return path, run.returncode == 0, run.stderr
 
 
 def all_headers(root: Path) -> list[str]:
-    tracked = subprocess.run(["git", "ls-files", ENGINE_DIR, EDITOR_DIR], cwd=str(root), capture_output=True, text=True)
+    tracked = subprocess.run(["git", "ls-files", ENGINE_DIR, PLATFORM_DIR, EDITOR_DIR], cwd=str(root), capture_output=True, text=True)
     return sorted(p for p in tracked.stdout.splitlines() if covered(p))
 
 
@@ -93,7 +104,8 @@ def self_test() -> int:
     command = "ccache /usr/bin/c++ -DA=1 -I/src/x -Winvalid-pch -include /t/CMakeFiles/e.dir/cmake_pch.hxx -MD -MT o.o -MF o.d -o o.o -c /src/a.cpp"
     got = flags_of(command, "/src/a.cpp")
     assert got == ["/usr/bin/c++", "-DA=1", "-I/src/x"], got
-    assert covered("engine/core/Scene.h") and covered("editor/Project.h")
+    assert covered("engine/core/Scene.h") and covered("editor/Project.h") and covered("engine/platform/android/X.h")
+    assert engine_flags("engine/platform/android/X.h") and not engine_flags("editor/Project.h")
     assert not covered("editor/tests/X.h") and not covered("engine/libs/x.h") and not covered("editor/Project.cpp")
     entries = [
         {"directory": "/t", "file": "/src/libs/a.cpp", "command": "c++ -DV -o CMakeFiles/lib.dir/a.o -c /src/libs/a.cpp"},
@@ -120,7 +132,7 @@ def main(argv: list[str]) -> int:
     headers = all_headers(ROOT) if args.all else [h for h in args.headers if covered(h) and (ROOT / h).is_file()]
     left_out = [] if args.all else [h for h in args.headers if h not in headers]
     if left_out:
-        print(f"check_headers: left out ({len(left_out)}, not engine/core/ or editor/ headers, or deleted): {' '.join(left_out[:10])}")
+        print(f"check_headers: left out ({len(left_out)}, not engine/core/, engine/platform/ or editor/ headers, or deleted): {' '.join(left_out[:10])}")
     if not headers:
         print("check_headers: no header to check")
         return 0
