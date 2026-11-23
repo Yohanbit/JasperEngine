@@ -874,7 +874,7 @@ android)
             exit 6
         fi
         echo 'android: running gradlew'
-        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
+        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon --stacktrace assembleDebug "${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
         gradle_status=${PIPESTATUS[0]}
         [[ $gradle_status -eq 0 ]] || { echo "android: gradlew exited $gradle_status" >&2; exit "$gradle_status"; }
         ls "/src/$APK_DIR/gradle.log"

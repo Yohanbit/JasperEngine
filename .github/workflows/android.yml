@@ -159,9 +159,15 @@ jobs:
           if [[ $status -ne 0 ]]; then
             for log in build/android/gradle.log build/test-results/android-build.log; do
               [[ -s "$log" ]] || continue
-              tail -n 8 "$log" 2>&1 | while IFS= read -r line; do
+              # the compiler's own errors first: a native build fails with `path:line:col: error:`
+              # (clang) or `error:` (CMake/ninja), and Gradle's summary at the end says neither
+              grep -aE "error:|error :|fatal error:|CMake Error|ninja: build stopped|undefined reference|FAILED:|What went wrong" "$log" 2>/dev/null | head -n 8 | while IFS= read -r line; do
                 [[ -z "$line" ]] && continue
                 printf '::error::[apk %s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
+              done
+              tail -n 8 "$log" 2>&1 | while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                printf '::error::[apk %s tail] %s\n' "$(basename "$log")" "${line//'%'/%25}"
               done
             done
           fi
@@ -222,13 +228,13 @@ jobs:
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               printf '::error::[%s …] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-            done < <(tail -n 12 "$log" 2>&1)
+            done < <(tail -n 22 "$log" 2>&1)
 
             # then the errors the patterns name, which is what a build is usually fixed by
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               printf '::error::[%s] %s\n' "$(basename "$log")" "${line//'%'/%25}"
-            done < <(grep -aE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|usage:|No such file" "$log" 2>/dev/null | tail -n 8)
+            done < <(grep -aE "^e: |error:|error :|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:|FAILED:|Execution failed|> A problem occurred|^/src/.*:[0-9]+" "$log" 2>/dev/null | tail -n 10)
           done
 
           echo "::error::exit codes: APK step failed; logs were: $(ls -la build/test-results 2>/dev/null | tr '\n' ' ')"
