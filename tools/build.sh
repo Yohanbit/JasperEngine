@@ -838,50 +838,50 @@ android)
     # looked exactly like the block never running, and there was no way to tell from outside.
     run bash -euo pipefail -c 'echo "android: running in $(uname -a), ANDROID_HOME=${ANDROID_HOME:-unset}, workspace=$(pwd)";
         test -x engine/workspaces/androidstudio/gradlew || { echo "android: gradlew is missing in the container" >&2; exit 4; }'
-    run bash -euo pipefail -c "
+    # A QUOTED heredoc (<<'ANDROID_BUILD'), so nothing in it is expanded by this shell: the block
+    # runs under bash -euo pipefail inside the container, and set -u turns a variable that names are
+    # expanded out here -- or a ${#array[@]} that only the inner shell knows -- into an abort before
+    # the first line runs. Two runs were lost to exactly that before the heredoc.
+    # The three values it needs from here are passed as arguments: the folder the APK is copied to,
+    # and the two pieces of the environment.
+    run bash -euo pipefail -c "$(cat <<'ANDROID_BUILD'
         echo 'android: gradle block started'
+        APK_DIR=$1
+        PROJECT_ENV=$2
         cd engine/workspaces/androidstudio || { echo 'android: no androidstudio workspace in the container' >&2; exit 5; }
-        ndk=\$(sed -n 's/^ *ndkVersion = \"\\(.*\\)\"\$/\\1/p' app/build.gradle)
-        [[ -n \"\$ndk\" ]] || { echo 'no ndkVersion in app/build.gradle' >&2; exit 1; }
+        ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle)
+        [[ -n "$ndk" ]] || { echo 'no ndkVersion in app/build.gradle' >&2; exit 1; }
         # The image installs the SDK but not the NDK: docker/android.Dockerfile says AGP installs any
         # missing NDK/CMake, and it does. Installing it here with sdkmanager was wrong as well as
-        # silent -- sdkmanager does not accept the licence that ndk;\$ndk needs, so the step could
-        # fail before gradlew ever ran and leave only the host's \"no APK\" line behind. The version
-        # is still read from build.gradle, because AGP will pin the same one.
-        if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
-            echo \"android: NDK \$ndk is not in the image; AGP installs it on the first build\" >&2
+        # silent -- sdkmanager does not accept the licence that ndk;$ndk needs, so the step could
+        # fail before gradlew ever ran and leave only the host's "no APK" line behind.
+        if [[ ! -f "$ANDROID_HOME/ndk/$ndk/source.properties" ]]; then
+            echo "android: NDK $ndk is not in the image; AGP installs it on the first build" >&2
         fi
-        echo \"android: past the NDK check, about to look for the identity\" >&2
-        # build/.cache/identity.args names this APK (tools/android/release_identity.py --gradle):
-        # one -P per line, read with mapfile so a value may contain a space ("Android RC1").
-        # It lives under .cache and not in build/android because --clean removes $OUT, which for
-        # this target is build/android, and the identity must survive that. Absent, the array is
-        # empty and the APK is unnamed exactly as before.
+        # build/.cache/identity.args names this APK (tools/android/release_identity.py --gradle): one
+        # -P per line, read with mapfile so a value may contain a space ("Android RC1"). It lives
+        # under .cache and not in build/android because --clean removes $OUT, which for this target is
+        # build/android, and the identity must survive that.
         IDENTITY_ARGS=()
         if [[ -s /src/build/.cache/identity.args ]]; then
             mapfile -t IDENTITY_ARGS < /src/build/.cache/identity.args || IDENTITY_ARGS=()
         fi
-        echo "android: identity args: \${#IDENTITY_ARGS[@]} \${IDENTITY_ARGS[*]:-none}" >&2
+        echo "android: identity args: ${#IDENTITY_ARGS[@]} ${IDENTITY_ARGS[*]:-none}" >&2
         # Made here, in the container, immediately before it is written to: the host's mkdir runs
-        # before the container starts, and the block failing with "no such file or directory" from
-        # tee is a failure nobody can read.
+        # before the container starts, and a tee that cannot open its file is a failure nobody reads.
         if ! mkdir -p "/src/$APK_DIR" 2>/dev/null; then
-            echo "android: cannot make /src/$APK_DIR -- it may exist as a file, or the mount is not writable" >&2
+            echo "android: cannot make /src/$APK_DIR -- it may be a file, or the mount may be unwritable" >&2
             exit 6
         fi
         echo 'android: running gradlew'
-        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
-        # \$: this string is expanded by the OUTER shell first, and an unescaped \$gradle_status here
-        # aborted the outer script with "unbound variable" under set -u -- before docker was even
-        # called. It read, from outside, exactly like a block that succeeded without doing anything.
-        gradle_status=\${PIPESTATUS[0]}
-        [[ \$gradle_status -eq 0 ]] || { echo "android: gradlew exited \$gradle_status" >&2; exit "\$gradle_status"; }
-        # the globs are not compgen here (this is a real shell with real files): a failed one must
-        # say so, and not be handed to cp as a literal name
-        ls /src/$APK_DIR/gradle.log
-        cp app/build/outputs/apk/debug/*.apk "/src/$APK_DIR/"
+        env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
+        gradle_status=${PIPESTATUS[0]}
+        [[ $gradle_status -eq 0 ]] || { echo "android: gradlew exited $gradle_status" >&2; exit "$gradle_status"; }
+        ls "/src/$APK_DIR/gradle.log"
+        cp app/build/outputs/apk/debug/*.apk "/src/$APK_DIR/" || { echo "android: Gradle succeeded but wrote no APK to app/build/outputs/apk/debug" >&2; exit 8; }
         python3 /src/tools/ci/check_gradle_warnings.py "/src/$APK_DIR/gradle.log"
-    " || build_status=$?
+ANDROID_BUILD
+    )" android ${APK_DIR:?} "${PROJECT_ENV:-}" || build_status=$?
     if [[ $build_status -ne 0 ]]; then
         echo "android: the build failed (status $build_status); the compiler's and Gradle's own lines are in $APK_DIR/gradle.log" >&2
         exit "$build_status"
