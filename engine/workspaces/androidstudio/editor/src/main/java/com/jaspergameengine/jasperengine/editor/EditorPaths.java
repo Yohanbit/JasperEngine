@@ -40,6 +40,16 @@ final class EditorPaths {
         projects.mkdirs();
         setEnv("JASPERENGINE_ANDROID_CONFIG_DIR", config.getAbsolutePath());
         setEnv("JASPERENGINE_ANDROID_PROJECTS_DIR", projects.getAbsolutePath());
+
+        // The screen, in the two units the native side cannot ask for: its density and the size of
+        // the short edge in dp. Together they are what "the same editor on every phone" means --
+        // the style has to be scaled so that a menu row is one fingertip high, whatever the phone's
+        // resolution and density are. See BackendAndroid.cpp's uiScale().
+        android.util.DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        setEnv("JASPERENGINE_ANDROID_DENSITY", Float.toString(metrics.density));
+        setEnv("JASPERENGINE_ANDROID_SHORTEST_DP",
+                Integer.toString(Math.round(Math.min(metrics.widthPixels, metrics.heightPixels)
+                        / metrics.density)));
     }
 
     /**

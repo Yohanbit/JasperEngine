@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -45,10 +46,41 @@ namespace jasperengine::editor {
 
     namespace {
 
-        // ImGui's style is authored for a ~96 dpi desktop at 1:1. A phone is ~420 dpi: at 1:1 a
-        // menu row is about 20 px, well under a fingertip. Scaling the style (not the atlas)
-        // puts a frame near Android's 48 dp touch target.
-        constexpr float ANDROID_UI_SCALE = 2.6f;
+        // ImGui's style is authored for a desktop at 1:1, where a menu row is about 20 px tall and
+        // one logical unit is one physical pixel. Android works in dp: a pixel is 1/density of one,
+        // and a fingertip needs 48 dp, so the style has to be scaled or nothing can be hit.
+        //
+        // This used to be the constant 2.6 -- which, on the phone the port was checked on, IS its
+        // density (420 dpi / 160 = 2.625). The constant was the device it was tuned on, written
+        // down. Scaling by the density instead is the same number there and the right one
+        // everywhere: one logical unit becomes one dp, so a row is the same physical height on a
+        // 1080x2400 phone at 420 dpi and on a 1440x3200 one at 560 dpi, with no setting to touch.
+        //
+        // EditorPaths.java exports the density and the short edge in dp; the fallback is the value
+        // that was tuned on the device, for the unlikely case the export did not reach the process.
+        //
+        // The one adjustment a small screen needs: below 360 dp of short edge the dock would be all
+        // chrome at dp-accurate sizes, so the scale steps down a notch and the panels stay usable.
+        float uiScale(){
+            static const float scale = []{
+                constexpr float TUNED_ON_DEVICE = 2.6f;
+                const char* densityText = std::getenv("JASPERENGINE_ANDROID_DENSITY");
+                if (!densityText || !*densityText)
+                    return TUNED_ON_DEVICE;
+                const float density = std::strtof(densityText, nullptr);
+                if (!(density > 0.0f))
+                    return TUNED_ON_DEVICE;
+                float computed = std::clamp(density, 1.5f, 4.0f);
+                const char* shortestText = std::getenv("JASPERENGINE_ANDROID_SHORTEST_DP");
+                if (shortestText && *shortestText){
+                    const long shortestDp = std::strtol(shortestText, nullptr, 10);
+                    if (shortestDp > 0 && shortestDp < 360)
+                        computed = std::max(1.5f, computed * 0.85f);
+                }
+                return computed;
+            }();
+            return scale;
+        }
 
         android_app* gAndroidApp = nullptr;
 
@@ -129,7 +161,7 @@ namespace jasperengine::editor {
         void logFrameGeometry(const char* when){
             Log::print("[editor] %s: surface %dx%d, insets top %d bottom %d, scale %.2f",
                        when, gWidth, gHeight, gInsetTop, gInsetBottom,
-                       static_cast<double>(ANDROID_UI_SCALE));
+                       static_cast<double>(uiScale()));
         }
 
         double monotonicSeconds(){
@@ -653,8 +685,8 @@ namespace jasperengine::editor {
         initImGuiPlatform();
 
         // Touch UI: scale the style before App::setup(), which lays the dock out for it
-        ImGui::GetStyle().ScaleAllSizes(ANDROID_UI_SCALE);
-        Theme::setUiScale(ANDROID_UI_SCALE);
+        ImGui::GetStyle().ScaleAllSizes(uiScale());
+        Theme::setUiScale(uiScale());
 
         app.setup();
         gLastFrameTime = monotonicSeconds();
@@ -756,7 +788,7 @@ namespace jasperengine::editor {
 
         Log::print("[editor] leaving the frame loop");
         app.shutdownBackgroundWork();
-        app.saveWindowSettings(gWidth, gHeight, false, ANDROID_UI_SCALE);
+        app.saveWindowSettings(gWidth, gHeight, false, uiScale());
 
         renderer->shutdownImGui();
         shutdownImGuiPlatform();

@@ -57,8 +57,41 @@ created, no error comes from the process. Two defects are visible by using it:
 
 | # | Symptom | Cause | Fix |
 |---|---|---|---|
-| 11 | the top menu row is drawn inside the status bar (clock, battery, wifi); measured on the screenshot, content starts at **y = 0** | the window is created with `setDecorFitsSystemWindows(false)` and the bars stay visible over it, and nothing insets ImGui's viewport | `platformNewFrame()` insets the main viewport's `WorkPos`/`WorkSize` by the bars' dp sizes (status bar 24 dp, gesture bar 24 dp) scaled by the display density. Every panel in this editor lays itself out in that Work area (`App.cpp:1991`, `2345`; the hub, the dialogs, the search palette), so one inset moves all of them. Recomputed on `APP_CMD_CONFIG_CHANGED`, so a rotation follows |
+| 11 | the top menu row is drawn inside the status bar (clock, battery, wifi); measured on the screenshot, content starts at **y = 0** | the window is created with `setDecorFitsSystemWindows(false)` and the bars stay visible over it, and nothing insets ImGui's viewport | **first attempt, wrong (see #13)**: `platformNewFrame()` wrote the main viewport's `WorkPos`/`WorkSize` by hand |
 | 12 | the soft keyboard's backspace erased nothing | `GameTextInput` reports its **whole text**, never a keystroke: a deletion is only visible as a diff, and the backend forwarded characters only, which can grow a field but never shrink it | use the engine's own `ComponentTextInput` (`AndroidTextInput.h`) — the class its `InputField` uses — to diff the text into "one backspace per removed character", reset it when the keyboard opens on another field, and drain the backspaces into ImGui as `ImGuiKey_Backspace` before the typed characters |
+
+## Defects found on the phone (second run, build `2a1b8cac`)
+
+The report came back as three sentences, and each one had a different cause — two of them mine from
+the commit that was supposed to fix the screen:
+
+> "si le doy para hacer un proyecto no me sale nada, tampoco me deja exportar ni mover nada"
+> "la parte de notificaciones no se quita… la línea para salir de la app tampoco"
+
+| # | Symptom | Cause | Fix |
+|---|---|---|---|
+| 13 | the bars did not move at all — #11's fix had no effect | `platformNewFrame()` runs from `EditorFrame::render` **after** `renderer->newFrame()` (EditorFrame.cpp:189-190), i.e. inside an open ImGui frame, and ImGui recomputes the work rect from `WorkInsetMin`/`WorkInsetMax` at the start of every `NewFrame` (imgui.cpp:16984-16997). The assignment was overwritten before any window read it | use ImGui's own mechanism, `Platform_GetWindowWorkAreaInsets`, which imgui.h:4284 documents as *"safeAreaInsets in iOS land, DisplayCutout in Android land"*; registered in `initImGuiPlatform()` |
+| 14 | nothing could be dragged or resized; taps still worked | ImGui derives `MouseDelta` from **two positions queued in the same frame** — the one from before the frame and the last one queued. The backend queued one position per `ACTION_MOVE`, so both were equal, the delta was **0**, and every drag was a click | each MOVE queues `(previous, current)`, tracking the previous point from `ACTION_DOWN` so the step is the whole movement, however many events arrived |
+| 15 | — | a change made while chasing #12 that never shipped: `GameActivity_setTextInputState(empty)` on keyboard open | it does not reset a counter, it **replaces the field**, so tapping a field that already held "New Project" emptied it. Reverted; only this side's diff counter is reset |
+| 16 | every diagnosis so far was made from a screenshot: the boot reports carried only Java lines | `Log::print` writes to `stderr` (Logger.cpp:367), which on Android goes nowhere — not logcat, and there is no terminal | `Logger` writes through `__android_log_print` under `__ANDROID__`, so `EditorBootLog`'s own logcat capture contains the engine's lines |
+
+Two of these are worth stating plainly, because they were the cost of the whole round: **#13 was a
+fix that could not work where it was written**, and **#16 is why nobody could see that** — without a
+line of the engine in logcat, "the bars did not move" and "the code never ran" look identical.
+
+To remove the guessing for good, the boot report now also carries (a) the frame geometry — surface
+size, insets, UI scale — logged once when the context comes up, (b) the three silent early returns in
+`hubCreateProject` (`a creation is still running`, `a project is loading`, `a project change is
+pending`), where a new project is being written, and why it failed if it did, and (c) whether each
+system bar is visible, read from `WindowInsets` in the report rather than judged from a screenshot.
+
+**Immersive, not inset.** #11 assumed the bars stay and the content moves around them. What the phone
+needs is the opposite: `EditorActivity` called `controller.show(systemBars())` — it was *asking* for
+them. It now calls `hide(systemBars())` with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`, so a swipe from
+the top edge brings the status bar and the shade back, one from the bottom brings the navigation bar,
+and both hide themselves again. With no bars over the content the insets are 0 and the editor is
+genuinely full screen; the inset plumbing stays in place for the cutout and the transient bars, and
+for the day a Java-side value can be handed to it.
 
 ## Build history
 
