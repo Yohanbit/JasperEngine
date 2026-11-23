@@ -11,6 +11,8 @@
 #include "AndroidTouchGestures.h"
 #include "AndroidImageOrientation.h"
 #include "AndroidImportPreflight.h"
+#include "AndroidModelSidecars.h"
+#include "AndroidImportTransfer.h"
 #include "asset/AssetType.h"
 
 #include <gtest/gtest.h>
@@ -1315,4 +1317,133 @@ TEST(AndroidTouchGestures, ADragIsNotATap) {
     dragged.phase = TouchPhase::ENDED;
     updateTap(state, {dragged});
     EXPECT_FALSE(state.tap.tapped) << "a release 200 px from where it started is a drag's end";
+}
+
+// ---- an import that was cut short
+
+using jasperengine::android::planTransfer;
+using jasperengine::android::settleTransfer;
+using jasperengine::android::transferStep;
+using jasperengine::android::TransferOutcome;
+using jasperengine::android::TransferPlan;
+using jasperengine::android::TransferStep;
+
+TEST(AndroidImportTransfer, TheCopyGoesToAHiddenTemporaryInTheSameFolder) {
+    const TransferPlan plan = planTransfer("assets/photo.png", 4u << 20, 0);
+    EXPECT_EQ(plan.target, "assets/photo.png");
+    // hidden and suffixed: AssetTypes never sees it, and a rename within one folder is atomic
+    EXPECT_EQ(plan.temporary, "assets/.photo.png.jeimport");
+    EXPECT_TRUE(isImportTemporary(plan.temporary));
+    EXPECT_FALSE(isImportTemporary(plan.target)) << "an asset is not a temporary";
+    EXPECT_EQ(temporaryTarget(plan.temporary), "assets/photo.png");
+    EXPECT_EQ(temporaryTarget("a/b/.x.jpg.jeimport"), "a/b/x.jpg");
+    EXPECT_TRUE(temporaryTarget("a/b/photo.png").empty());
+    EXPECT_FALSE(isImportTemporary(".jeimport")) << "a name with nothing in it is not a copy";
+}
+
+TEST(AndroidImportTransfer, ACopyThatStoppedResumesWhereItLeftOffInsteadOfStartingOver) {
+    const TransferPlan plan = planTransfer("photo.png", 10u << 20, 6u << 20);
+    EXPECT_EQ(plan.resumeFrom, 6u << 20);
+    EXPECT_FALSE(plan.discardPartial);
+
+    const TransferStep step = transferStep(plan, 6u << 20, 100u << 20, 32u << 20, 1u << 20);
+    EXPECT_EQ(step.skipBytes, 6u << 20) << "the provider seeks past what is already on disk";
+    EXPECT_EQ(step.copyBytes, 1u << 20) << "one chunk, not the rest in one gulp";
+    EXPECT_EQ(step.outcome, TransferOutcome::Complete) << "the step itself is fine";
+
+    // read the last of it: 3 MB left, asked for 4
+    const TransferStep last = transferStep(plan, 7u << 20, 100u << 20, 32u << 20, 4u << 20);
+    EXPECT_EQ(last.copyBytes, 3u << 20);
+    EXPECT_EQ(settleTransfer(plan, 10u << 20, false, true), TransferOutcome::Complete);
+}
+
+TEST(AndroidImportTransfer, APartialThatIsAlreadyTheWholeFileNeedsNoCopy) {
+    // a crash between the last write and the rename: every byte is there
+    const TransferPlan plan = planTransfer("photo.png", 4u << 20, 4u << 20);
+    EXPECT_EQ(plan.resumeFrom, 4u << 20);
+    const TransferStep step = transferStep(plan, 4u << 20, 0, 0, 1u << 20);
+    EXPECT_EQ(step.outcome, TransferOutcome::Complete);
+    EXPECT_EQ(step.copyBytes, 0u) << "nothing left to read";
+    EXPECT_EQ(settleTransfer(plan, 4u << 20, false, false), TransferOutcome::Complete);
+}
+
+TEST(AndroidImportTransfer, ATemporaryLongerThanItsSourceStartsOverAndSaysSo) {
+    // the provider now reports a smaller file: the bytes on disk cannot be a prefix of it
+    const TransferPlan plan = planTransfer("photo.png", 2u << 20, 5u << 20);
+    EXPECT_TRUE(plan.discardPartial);
+    EXPECT_EQ(plan.resumeFrom, 0u);
+    const TransferStep step = transferStep(plan, 0, 100u << 20, 0, 1u << 20);
+    EXPECT_EQ(step.skipBytes, 0u);
+    EXPECT_NE(step.message.find("starts over"), std::string::npos) << step.message;
+}
+
+TEST(AndroidImportTransfer, AFullVolumeStopsTheCopyBeforeItLosesThePartial) {
+    const TransferPlan plan = planTransfer("video.mp4", 800u << 20, 600u << 20);
+    // 90 MB free, 200 MB left to copy: refused, and the 600 MB already there are named
+    const TransferStep step = transferStep(plan, 600u << 20, 90u << 20, 32u << 20, 8u << 20);
+    EXPECT_EQ(step.outcome, TransferOutcome::OutOfSpace);
+    EXPECT_EQ(step.copyBytes, 0u) << "no write is attempted that would eat the reserve";
+    EXPECT_NE(step.message.find("600 MB are already there"), std::string::npos) << step.message;
+
+    // the same copy with room: fine
+    const TransferStep room = transferStep(plan, 600u << 20, 400u << 20, 32u << 20, 8u << 20);
+    EXPECT_EQ(room.outcome, TransferOutcome::Complete);
+    EXPECT_EQ(room.copyBytes, 8u << 20);
+}
+
+TEST(AndroidImportTransfer, AnInterruptedCopyKeepsItsPartialAndACancelledOneIsItsOwnOutcome) {
+    const TransferPlan plan = planTransfer("photo.png", 10u << 20, 0);
+    // the provider died at 4 MB: the temporary stays, the next attempt resumes it
+    EXPECT_EQ(settleTransfer(plan, 4u << 20, false, true), TransferOutcome::Interrupted);
+    // the user cancelled: the caller decides, and a cancel is not a failure to report
+    EXPECT_EQ(settleTransfer(plan, 4u << 20, true, false), TransferOutcome::Cancelled);
+    // more bytes than the provider promised: the file is not what it said it was
+    EXPECT_EQ(settleTransfer(plan, 11u << 20, false, true), TransferOutcome::Mismatched);
+}
+
+TEST(AndroidImportTransfer, AProviderThatGivesNoSizeCompletesWhenItsStreamEnds) {
+    const TransferPlan plan = planTransfer("photo.png", 0, 0);
+    EXPECT_EQ(plan.expectedBytes, 0u);
+    const TransferStep step = transferStep(plan, 0, 0, 0, 4u << 20);
+    EXPECT_EQ(step.outcome, TransferOutcome::Complete);
+    EXPECT_EQ(step.copyBytes, 4u << 20);
+    // the stream's end is the only completion signal there is
+    EXPECT_EQ(settleTransfer(plan, 3u << 20, false, false), TransferOutcome::Interrupted);
+    EXPECT_EQ(settleTransfer(plan, 3u << 20, false, true), TransferOutcome::Complete);
+}
+
+TEST(AndroidImportTransfer, ARenamedTemporaryIsNotMistakenForAnAsset) {
+    // what the folder scan sees after a copy that finished its bytes but crashed before the rename
+    EXPECT_TRUE(isImportTemporary("assets/.body.glb.jeimport"));
+    EXPECT_EQ(temporaryTarget("assets/.body.glb.jeimport"), "assets/body.glb");
+    // and what it must never treat as one
+    EXPECT_FALSE(isImportTemporary("assets/body.glb"));
+    EXPECT_FALSE(isImportTemporary("assets/.gitignore"));
+    EXPECT_FALSE(isImportTemporary(".jeimport"));
+    EXPECT_FALSE(isImportTemporary("a/.b.jeimportx"));
+    EXPECT_FALSE(isImportTemporary("a/b.jeimport"));
+}
+
+TEST(AndroidImportTransfer, ARetryOfARetryKeepsOneSuffix) {
+    // found by fuzzing: a name that is already a temporary planned ".<name>.jeimport.jeimport",
+    // which isImportTemporary() does not recognise, so a folder scan could never recover it
+    const TransferPlan plan = planTransfer("assets/.photo.png.jeimport", 100, 0);
+    EXPECT_EQ(plan.target, "assets/photo.png");
+    EXPECT_EQ(plan.temporary, "assets/.photo.png.jeimport");
+    EXPECT_TRUE(isImportTemporary(plan.temporary));
+}
+
+TEST(AndroidImportTransfer, EveryPlanWritesSomethingTheScannerCanRecover) {
+    // a name with no leaf, and no name at all: the temporary must still be the shape the import
+    // folder's recovery looks for, or the bytes would sit there forever (found by fuzzing)
+    for (const char* wanted : {"dir/", "", "a/b/"}) {
+        const TransferPlan plan = planTransfer(wanted, 100, 0);
+        EXPECT_TRUE(isImportTemporary(plan.temporary)) << wanted << " -> " << plan.temporary;
+    }
+    // and the target agrees with what the temporary maps back to, or a resumed copy would rename
+    // the bytes onto a name the plan never mentioned
+    const TransferPlan dir = planTransfer("dir/", 100, 0);
+    EXPECT_EQ(dir.temporary, "dir/.import.jeimport");
+    EXPECT_EQ(dir.target, "dir/import");
+    EXPECT_EQ(temporaryTarget(dir.temporary), dir.target);
 }
