@@ -146,18 +146,28 @@ models that ship a `common.png` overwrite each other (bug 10m).
 `android::accessFor(...)`. Use `access.warning` verbatim in the project picker; `access.atomicRename`
 decides whether a save may rely on `io::writeFileAtomic`.
 
-## 4. A crash in the core file I/O, found but not touched (yours)
+## 4. Two crashes in the core file I/O, found but not touched (yours)
 
-`engine/core/io/Data.cpp` is the main agent's core, so this is reported, not edited. Reproduced
-under ASan+UBSan on the host (`/tmp/datarepro2.cpp`, a two-line program):
+`engine/core/io/Data.cpp` is the main agent's core, so this is reported, not edited.
+`tools/android/data-io-overflow-repro.cpp` is a standalone reproduction with the real arithmetic
+copied beside the patch, so the fix can be seen working before it is applied:
+
+```
+g++ -std=c++20 -O0 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+    tools/android/data-io-overflow-repro.cpp -o /tmp/datarepro
+/tmp/datarepro A     # aborts: AddressSanitizer SEGV in the read
+/tmp/datarepro B     # runs every case, including the patch's answers
+```
+
+### A. A read past the end, with an unsigned wrap (a crash)
 
 ```
 jasperengine::Data empty(nullptr, 0, true, false);
 empty.seek(-4);
-empty.read(out, 8);     // AddressSanitizer: SEGV on unknown address ... in Data::read (Data.cpp:59)
+empty.read(out, 8);     // AddressSanitizer: SEGV ... in Data::read (Data.cpp:59)
 ```
 
-Cause, `Data::seek`:
+`Data::seek`:
 
 ```cpp
 void Data::seek(int aOffset) {
@@ -168,29 +178,50 @@ void Data::seek(int aOffset) {
 }
 ```
 
-`Data::read` then does `memcpy(aDst, dataPtr + offset, ...)` with the wrapped offset. Reachable from
-script: `FileData.newFile(false)` gives a `Data`, `seek` is bound in `IOClassesLua.cpp:457`, and
+and `Data::read` then `memcpy`s from `dataPtr + offset`. Reachable from script:
+`FileData.newFile(false)` gives a `Data`, `seek` is bound in `IOClassesLua.cpp:457`, and
 `read8`/`read16`/`read32`/`readString` follow. A truncated or empty asset is the everyday way to
-reach it — on a phone, a provider handing over a partial file makes one.
+reach it — and on a phone a provider handing over a partial file makes one, which is exactly what
+`AndroidImportTransfer.h` exists to prevent.
 
-The patch (three lines, no behaviour change for a valid seek):
+### B. A read at the end returns the wrong bytes instead of nothing (a silent corruption)
+
+```cpp
+read(4) on a 4-byte buffer;  // offset is now 4
+read(1);                    // the guard is `offset + aBytes >= dataLength`, so aBytes = 4 - 5 -> wraps
+                            // ...and the buffer's *first* byte comes back
+```
+
+A reader that loops until `read()` returns 0 never reaches it, and a parser that trusts the count
+reads a byte that is not there. `>=` should be `>`, and a read with the cursor already past the end
+must return 0.
+
+### The patch (no behaviour change for a valid seek)
 
 ```cpp
 void Data::seek(int aOffset) {
-    if (dataLength == 0){ offset = 0; return; }
+    // signed arithmetic, a real lower bound, and the upper bound is dataLength -- not dataLength - 1,
+    // which made "seek past the end, then read" return that last byte again (defect B, one line up)
     long long target = aOffset >= 0 ? (long long)aOffset : (long long)dataLength + aOffset;
     if (target < 0) target = 0;
-    const long long last = (long long)dataLength - 1;
-    if (target > last) target = last;
+    if (target > (long long)dataLength) target = (long long)dataLength;
     offset = (unsigned int)target;
+}
+
+unsigned int Data::read(unsigned char *aDst, unsigned int aBytes) {
+    if (!dataPtr || offset >= dataLength || aBytes == 0) return 0;   // the guard, before any maths
+    const unsigned int available = dataLength - offset;
+    if (aBytes > available) aBytes = available;
+    memcpy(aDst, dataPtr + offset, aBytes);
+    offset += aBytes;
+    return aBytes;
 }
 ```
 
-and, so a caller that reads before seeking cannot do it either, a guard at the top of `read`:
-`if (!dataPtr || offset >= dataLength || aBytes == 0) return 0;`.
-
-A test belongs beside `AssetIOServiceTest`/`DataOpenTest` in `engine/tests/core/io/` (an empty `Data`
-and a 4-byte one, `seek(-1)` / `seek(-100)` / `seek(past)` then `read`, no crash and `pos()` sane).
+`tools/android/data-io-overflow-repro.cpp` runs both defects and both fixes side by side; its
+`fixed::` version is the patch above, verbatim. A test belongs beside `AssetIOServiceTest` /
+`DataOpenTest` in `engine/tests/core/io/`: an empty `Data` and a 4-byte one, `seek(-1)` /
+`seek(-100)` / `seek(past)` then `read`, no crash, `read` at the end returning 0, and `pos()` sane.
 
 ## Nothing here is device-verified, on purpose
 
