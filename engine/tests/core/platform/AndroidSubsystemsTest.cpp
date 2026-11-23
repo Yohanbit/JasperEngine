@@ -1044,6 +1044,20 @@ TEST(AndroidImportPreflight, AFileThatIsNotAnAssetIsCopiedAndNotReportedAsBroken
 
 // ---- model sidecars
 
+TEST(AndroidAssetImport, APhoneFormatIsClassifiedByItsExtensionWhenTheMagicIsNotEnough) {
+    // .m4a is ISO-BMFF, which many containers share: calling it Unknown said "copied as it is"
+    // instead of "will not play", and made playbackSupportOf unreachable for the format it exists
+    // for (found by tools/android-asset-report.py on a real folder)
+    const std::vector<uint8_t> ftyp = {0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'M', '4', 'A', ' ', 0, 0, 0, 0};
+    EXPECT_EQ(assetTypeForImport("clip.m4a", ftyp), AssetType::Audio);
+    EXPECT_EQ(assetTypeForImport("clip.aac", {}), AssetType::Audio);
+    EXPECT_EQ(assetTypeForImport("voice.opus", {}), AssetType::Audio);
+    // the same for the photo formats a share sheet offers without their magic in reach
+    EXPECT_EQ(assetTypeForImport("icon.webp", {}), AssetType::Texture);
+    EXPECT_EQ(assetTypeForImport("IMG_0001.heic", {}), AssetType::Texture);
+    EXPECT_EQ(assetTypeForImport("IMG_0001.avif", {}), AssetType::Texture);
+}
+
 TEST(AndroidModelSidecars, AGltfNamesTheFilesAPhoneCannotBringAlong) {
     const std::string text = R"({"asset":{"version":"2.0"},
         "buffers":[{"uri":"Body.bin","byteLength":1024}],

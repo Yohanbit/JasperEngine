@@ -356,15 +356,21 @@ namespace jasperengine::android {
         }
 
         const std::string extension = extensionOf(fileName);
+        // webp/heic/avif: the extension table of editor/asset/AssetTypes.cpp lists WebP as a
+        // texture, and a share sheet offers both, so they are textures whatever their magic says
         if (extension == "png" || extension == "jpg" || extension == "jpeg" || extension == "bmp" ||
             extension == "tga" || extension == "gif" || extension == "hdr" || extension == "exr" ||
-            extension == "psd" || extension == "ktx2") {
+            extension == "psd" || extension == "ktx2" || extension == "webp" || extension == "heic" ||
+            extension == "heif" || extension == "avif") {
             return AssetType::Texture;
         }
         if (extension == "gltf" || extension == "glb" || extension == "obj" || extension == "fbx") {
             return AssetType::Model;
         }
-        if (extension == "wav" || extension == "ogg" || extension == "mp3" || extension == "flac") {
+        // m4a/aac/opus are audio the engine cannot play; calling them Unknown would tell the user
+        // "copied as it is" instead of "will not play", which is the whole point of the check
+        if (extension == "wav" || extension == "ogg" || extension == "mp3" || extension == "flac" ||
+            extension == "m4a" || extension == "aac" || extension == "opus") {
             return AssetType::Audio;
         }
         if (extension == "ttf" || extension == "otf" || extension == "ttc") return AssetType::Font;
