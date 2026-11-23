@@ -38,7 +38,7 @@
     using Microsoft::WRL::ComPtr;
 #endif
 
-#if defined(SOKOL_GLCORE) || defined(SOKOL_GLES3)
+#if defined(SOKOL_GLCORE)
     #ifdef __APPLE__
         #include <OpenGL/gl.h>
     #elif defined(_WIN32)
@@ -50,6 +50,19 @@
     #else
         #define GL_GLEXT_PROTOTYPES
         #include <GL/gl.h>
+    #endif
+#elif defined(SOKOL_GLES3)
+    // The NDK ships no <GL/gl.h> -- libGLESv3 is the only GL on Android, and <GLES3/gl3.h> is its
+    // header. Splitting on the renderer macro rather than on __ANDROID__ is what FrameReadback.cpp
+    // and ViewTools.cpp already do, and it also covers every other GLES3 target.
+    #if defined(__APPLE__)
+        #ifndef GLES_SILENCE_DEPRECATION
+        #define GLES_SILENCE_DEPRECATION
+        #endif
+        #include <OpenGLES/ES3/gl.h>
+    #else
+        #define GL_GLEXT_PROTOTYPES
+        #include <GLES3/gl3.h>
     #endif
 #endif
 
@@ -161,7 +174,17 @@ static bool readRenderPixels(FramebufferRender& render, unsigned int textureWidt
         // wait for them, Mesa's llvmpipe (the headless editor's driver) did not always (p4-gaps)
         glFinish();
         const GlFramebufferCalls& fbo = glFramebufferCalls();
-        if (whole || !fbo.available()) {
+    #if defined(SOKOL_GLES3)
+        // glGetTexImage is a desktop-GL call that GLES never had, so on GLES there is only one way
+        // to read a texture back: attach it to a framebuffer and glReadPixels. That is the branch
+        // below, which already runs on every platform for a partial read -- so `whole` decides the
+        // rectangle here, not the API. This is also what the first Android build tripped over:
+        // the file had no <GL/gl.h> to include, and the call it was after does not exist either.
+    #else
+        const bool viaTexture = whole || !fbo.available();
+    #endif
+    #if !defined(SOKOL_GLES3)
+        if (viaTexture) {
             std::vector<uint8_t> all;
             uint8_t* target = pixels;
             if (!whole) {
@@ -174,7 +197,9 @@ static bool readRenderPixels(FramebufferRender& render, unsigned int textureWidt
             for (unsigned int row = 0; !whole && row < height; row++) {
                 std::memcpy(pixels + (size_t)row * width * 4, all.data() + ((size_t)(y + row) * textureWidth + x) * 4, (size_t)width * 4);
             }
-        } else {
+        } else
+    #endif
+        {
             // a part (the eyedropper's texel): the texture on a framebuffer of its own, rows in
             // the texture's order (row y of the texture is y here as in glGetTexImage)
             GLint previousRead = 0;

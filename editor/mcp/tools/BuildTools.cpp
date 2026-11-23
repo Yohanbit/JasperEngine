@@ -74,7 +74,9 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
+#if !defined(__ANDROID__)
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -2249,6 +2251,16 @@ void runBuildTool(const CallPtr& call) {
             argStrings.push_back(a.get<std::string>());
         }
     }
+#if defined(__ANDROID__)
+    // The player is a desktop program: an Android app may not exec anything it did not ship, and
+    // Bionic has no fork() to do it with anyway -- so this does not stay a compile error to work
+    // around, it is the same answer CommandRunner::run, Platform::launchDetached and McpClient's
+    // StdioClient give on this platform. The tool reports it and the call fails; nothing pretends
+    // a run happened.
+    (void)argStrings;
+    call->fail("Android apps cannot run the player: the platform does not allow executing a program the app did not ship.");
+    return;
+#else
     std::vector<char*> argv;
     for (std::string& s : argStrings) argv.push_back(s.data());
     argv.push_back(nullptr);
@@ -2364,12 +2376,17 @@ void runBuildTool(const CallPtr& call) {
         (void)timedOut;
         finishPlayerRun(call, run);
     });
+#endif // !__ANDROID__
 }
 
 #else
 
 void runBuildTool(const CallPtr& call) {
+#if defined(__ANDROID__)
+    call->fail("Android apps cannot run the player: the platform does not allow executing a program the app did not ship.");
+#else
     call->fail("run_build is not implemented on Windows yet: start the player from its output directory.");
+#endif
 }
 
 #endif

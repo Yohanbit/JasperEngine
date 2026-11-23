@@ -28,7 +28,9 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/types.h>
+#if !defined(__ANDROID__)
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 #endif
 

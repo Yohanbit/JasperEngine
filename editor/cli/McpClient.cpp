@@ -31,9 +31,11 @@
 #include <csignal>
 #include <fcntl.h>
 #include <poll.h>
+#if !defined(__ANDROID__)
 #include <spawn.h>
-#include <sys/types.h>
 #include <sys/wait.h>
+#endif
+#include <sys/types.h>
 #include <unistd.h>
 extern char** environ;
 #endif

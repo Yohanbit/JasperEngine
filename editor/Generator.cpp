@@ -57,7 +57,9 @@
 #else
     #include <signal.h>
     #include <unistd.h>
+    #if !defined(__ANDROID__)
     #include <sys/wait.h>
+    #endif
     #include <fcntl.h>
 
     extern char **environ;
