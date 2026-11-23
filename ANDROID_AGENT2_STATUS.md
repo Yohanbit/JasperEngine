@@ -56,8 +56,8 @@ headers added here follow it exactly, which also means:
 
 ## 3. Implemented (this branch)
 
-All four are headers with no Android header, no new build wiring, C++20, `-Wall -Wextra -Werror`
-clean on GCC 12, and 25 gtest cases passing. See `ANDROID_TEST_MATRIX.md` for the evidence of every
+All five are headers with no Android header, no new build wiring, C++20, `-Wall -Wextra -Werror`
+clean on GCC 12, and 31 gtest cases passing. See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
 
 | File | What it provides | State |
@@ -79,6 +79,8 @@ case and the red control.
    embedded NUL). Found by `SanitizeKeepsUnicodeAndDropsControls`.
 5. `AndroidStorageSpace.h` was not self-sufficient (`<cstddef>` missing) — found by compiling each
    header alone, which `tools/check_headers.py` does not do for `engine/platform/`.
+6. `decodedBytes()` was assumed to saturate on the largest possible header (0x7FFFFFFF squared times
+   4 is just *inside* 64 bits, so it does not saturate there); the test now checks the real bound.
 
 ## 4. Dependencies on the integration agent (no file of theirs is modified)
 

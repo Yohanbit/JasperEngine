@@ -14,8 +14,9 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 | `AndroidTouchGestures` | same | pinch (distance, midpoint, angle, continuity, end), one-finger drag | 7 |
 | `AndroidStorageSpace` | same | write allowance, reserve, low/critical, app quota, cache release plan | 5 |
 | `AndroidProjectLayout` | same | path containment, project place, access flags, warnings, caches | 4 |
+| `AndroidImageLimits` | same | header sizes (7 formats), truncation, downscale, refusal, no-budget, overflow | 6 |
 
-Total: **25 cases, 25 pass, 0 skipped, 0 disabled.**
+Total: **31 cases, 31 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -50,13 +51,31 @@ not repeated here.
 | `AndroidProjectLayout.WarnsAboutARemovableVolume` | SD card warning is appended, not lost | pass |
 | `AndroidProjectLayout.RecognizesProjectCachesAndTheImportFolder` | `Library`/`Temp`/`.git` vs `assets`; assets dir | pass |
 
+| `AndroidImageLimits.ReadsPngJpegBmpGifPsdAndWebp` | IHDR + colour type + bit depth; SOF after an EXIF segment; negative BMP height; GIF/PSD/WebP | pass |
+| `AndroidImageLimits.UnreadableHeadersAreUnknownNotGuessed` | empty, garbage, cut IHDR, zero size, no SOF, a random file that looks like a TGA | pass |
+| `AndroidImageLimits.AHundredMegapixelPhotoIsDownscaledNotFatal` | 12000x9000 RGBA = 432 MB → 1/4 (3000x2250) within 256 MB and 4096 px; a fitting image untouched | pass |
+| `AndroidImageLimits.RefusesWhatNoDownscaleSaves` | 300 MP refused; 8000x8000 within a 16 MB / 2048 budget → 2000 px; 16-bit needs twice the scale | pass |
+| `AndroidImageLimits.NoBudgetMeansNoRefusal` | no byte limit ⇒ allowed; unknown header ⇒ decoder's business as today; texture limit still applies | pass |
+| `AndroidImageLimits.ExtremesDoNotOverflow` | 0x7FFFFFFF² does not wrap; 16-bit saturates | pass (**red**: my first assertion assumed saturation one step too early) |
+
+### Fuzzing (verified, sanitizers)
+
+`/tmp/fuzz.cpp` (not committed; reproduce below) feeds every truncation of eight real header
+fixtures plus 400,000 random buffers — 1 in 7 behind a PNG magic, 1 in 11 behind a JPEG SOI — through
+`readImageSize`, `assetTypeForImport` and `sanitizeFileName`, built with
+`-fsanitize=address,undefined`:
+
+```
+ok: 400209 inputs, no out-of-bounds read and no impossible size
+```
+
 ## How it was run (verified)
 
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 25 tests from 4 test suites ran. (0 ms total)
-[  PASSED  ] 25 tests.
+[==========] 31 tests from 5 test suites ran. (0 ms total)
+[  PASSED  ] 31 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
@@ -75,6 +94,7 @@ Docker, so that lane is CI's).
 | hidden-file extension (bug 2) | `ExtensionDecidesWhenBytesSayNothing` | `a.folder/photo` / `.bashrc` read as extensions |
 | audio extension (bug 3) | `ImportedAssetNameIsAnAssetName` | `clip.wav` for an Ogg |
 | control byte in a cut (bug 4) | `SanitizeKeepsUnicodeAndDropsControls` | `abc.tx` for an 8-byte name |
+| `ExtremesDoNotOverflow` | a saturating `decodedBytes()` assumed where the product still fits |
 | missing `<cstddef>` (bug 5) | compiling `AndroidStorageSpace.h` alone | `size_t has not been declared` |
 
 ## Not covered (and why)

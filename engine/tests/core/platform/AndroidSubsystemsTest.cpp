@@ -520,3 +520,209 @@ TEST(AndroidProjectLayout, RecognizesProjectCachesAndTheImportFolder) {
     EXPECT_TRUE(isOpenableProject(true));
     EXPECT_FALSE(isOpenableProject(false));
 }
+
+// ---- image limits
+
+#include "AndroidImageLimits.h"
+
+namespace {
+
+    // a PNG header with the given size and colour type (6: RGBA)
+    std::vector<uint8_t> pngHeader(uint32_t width, uint32_t height, int colorType, int bitDepth = 8) {
+        std::vector<uint8_t> bytes = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
+                                      0, 0, 0, 13, 'I', 'H', 'D', 'R',
+                                      (uint8_t)(width >> 24), (uint8_t)(width >> 16), (uint8_t)(width >> 8), (uint8_t)width,
+                                      (uint8_t)(height >> 24), (uint8_t)(height >> 16), (uint8_t)(height >> 8), (uint8_t)height,
+                                      (uint8_t)bitDepth, (uint8_t)colorType, 0, 0, 0, 0};
+        return bytes;
+    }
+
+    // a JPEG with an APP0 segment, then SOF0 of the given size
+    std::vector<uint8_t> jpegHeader(uint16_t width, uint16_t height, int channels) {
+        std::vector<uint8_t> bytes = {0xFF, 0xD8,
+                                      // APP0, length 4 (this is not a valid JFIF body; the walk only reads lengths)
+                                      0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00,
+                                      // SOF0, length 11 + 3 * channels
+                                      0xFF, 0xC0, 0x00, (uint8_t)(8 + 3 * channels), 8,
+                                      (uint8_t)(height >> 8), (uint8_t)height,
+                                      (uint8_t)(width >> 8), (uint8_t)width,
+                                      (uint8_t)channels};
+        for (int i = 0; i < channels; i++) {
+            bytes.push_back(1);
+            bytes.push_back(0x11);
+            bytes.push_back(0);
+        }
+        return bytes;
+    }
+
+    // a BMP with a 40-byte DIB header
+    std::vector<uint8_t> bmpHeader(int32_t width, int32_t height) {
+        std::vector<uint8_t> bytes(54, 0);
+        bytes[0] = 'B';
+        bytes[1] = 'M';
+        const uint32_t dib = 40;
+        bytes[14] = (uint8_t)dib;
+        bytes[18] = (uint8_t)width;
+        bytes[19] = (uint8_t)(width >> 8);
+        bytes[20] = (uint8_t)(width >> 16);
+        bytes[21] = (uint8_t)(width >> 24);
+        const uint32_t h = (uint32_t)height;
+        bytes[22] = (uint8_t)h;
+        bytes[23] = (uint8_t)(h >> 8);
+        bytes[24] = (uint8_t)(h >> 16);
+        bytes[25] = (uint8_t)(h >> 24);
+        bytes[28] = 24;
+        return bytes;
+    }
+
+}
+
+TEST(AndroidImageLimits, ReadsPngJpegBmpGifPsdAndWebp) {
+    ImageSize png = readImageSize(pngHeader(1080, 1920, 6));
+    ASSERT_TRUE(png.known);
+    EXPECT_EQ(png.format, ImageFormat::Png);
+    EXPECT_EQ(png.width, 1080);
+    EXPECT_EQ(png.height, 1920);
+    EXPECT_EQ(png.channels, 4);
+    EXPECT_EQ(png.decodedBytes(), 1080ull * 1920ull * 4ull);
+
+    // colour type 2 has no alpha before a decoder expands it: three channels, not four
+    EXPECT_EQ(readImageSize(pngHeader(64, 64, 2)).channels, 3);
+    // a 16-bit PNG takes twice the bytes
+    const ImageSize deep = readImageSize(pngHeader(64, 64, 6, 16));
+    EXPECT_EQ(deep.bitDepth, 16);
+    EXPECT_EQ(deep.decodedBytes(), 64ull * 64ull * 4ull * 2ull);
+
+    ImageSize jpeg = readImageSize(jpegHeader(4000, 3000, 3));
+    ASSERT_TRUE(jpeg.known);
+    EXPECT_EQ(jpeg.format, ImageFormat::Jpeg);
+    EXPECT_EQ(jpeg.width, 4000);
+    EXPECT_EQ(jpeg.height, 3000);
+    EXPECT_EQ(jpeg.channels, 3);
+
+    // an EXIF segment before the SOF is walked over, not parsed
+    std::vector<uint8_t> withExif = {0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x10};
+    withExif.resize(2 + 2 + 0x10, 0);
+    const std::vector<uint8_t> sof = jpegHeader(20, 10, 3);
+    withExif.insert(withExif.end(), sof.begin() + 2, sof.end());
+    EXPECT_EQ(readImageSize(withExif).width, 20);
+
+    // a top-down BMP has a negative height
+    const ImageSize down = readImageSize(bmpHeader(100, -50));
+    ASSERT_TRUE(down.known);
+    EXPECT_EQ(down.format, ImageFormat::Bmp);
+    EXPECT_EQ(down.width, 100);
+    EXPECT_EQ(down.height, 50) << "the sign says the rows are stored top down, not a negative size";
+
+    std::vector<uint8_t> gif = {'G', 'I', 'F', '8', '9', 'a', 0x20, 0x03, 0x58, 0x02};
+    const ImageSize gifSize = readImageSize(gif);
+    ASSERT_TRUE(gifSize.known);
+    EXPECT_EQ(gifSize.width, 0x0320);
+    EXPECT_EQ(gifSize.height, 0x0258);
+
+    std::vector<uint8_t> psd(26, 0);
+    psd[0] = '8'; psd[1] = 'B'; psd[2] = 'P'; psd[3] = 'S';
+    // height then width, big endian
+    psd[14] = 0; psd[15] = 0; psd[16] = 0x07; psd[17] = 0x08;
+    psd[18] = 0; psd[19] = 0; psd[20] = 0x0F; psd[21] = 0x00;
+    const ImageSize psdSize = readImageSize(psd);
+    ASSERT_TRUE(psdSize.known);
+    EXPECT_EQ(psdSize.width, 3840);
+    EXPECT_EQ(psdSize.height, 1800);
+}
+
+TEST(AndroidImageLimits, UnreadableHeadersAreUnknownNotGuessed) {
+    EXPECT_FALSE(readImageSize({}).known);
+    EXPECT_FALSE(readImageSize(textBytes("not an image at all, really not")).known);
+    // a PNG whose IHDR is cut off
+    std::vector<uint8_t> cut = pngHeader(100, 100, 6);
+    cut.resize(20);
+    EXPECT_FALSE(readImageSize(cut).known) << "a truncated header is not a size";
+    // a zero size, and one past int
+    EXPECT_FALSE(readImageSize(pngHeader(0, 100, 6)).known);
+    // a JPEG with no SOF before the scan
+    EXPECT_FALSE(readImageSize(bytesOf({0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x04, 0, 0})).known);
+    // a random file whose byte 2 happens to be a TGA image type but with no size is not a TGA
+    std::vector<uint8_t> random(18, 0);
+    random[2] = 2;
+    EXPECT_FALSE(readImageSize(random).known);
+}
+
+TEST(AndroidImageLimits, AHundredMegapixelPhotoIsDownscaledNotFatal) {
+    // a 12000x9000 camera mode: 432 MB as RGBA8, against a 256 MB budget
+    const ImageSize size = readImageSize(pngHeader(12000, 9000, 6));
+    ASSERT_TRUE(size.known);
+    EXPECT_EQ(size.decodedBytes(), 432ull * 1000ull * 1000ull);
+
+    ImageBudget budget;
+    budget.decodedBytesLimit = 256ull * 1024ull * 1024ull;
+    // the texture limit is 4096, which halves the 12000 px side to 3000 anyway
+    const ImageDecision decision = decideImageImport(size, budget);
+    EXPECT_EQ(decision.verdict, ImageVerdict::Downscale);
+    EXPECT_EQ(decision.scale, 0.25) << "two halvings fit both limits";
+    EXPECT_EQ(decision.width, 3000);
+    EXPECT_EQ(decision.height, 2250);
+    EXPECT_LE((uint64_t)decision.width * decision.height * 4, budget.decodedBytesLimit);
+    EXPECT_FALSE(decision.message.empty());
+
+    // a size that fits both limits is taken as it is
+    const ImageDecision ok = decideImageImport(readImageSize(pngHeader(2048, 1024, 4)), budget);
+    EXPECT_EQ(ok.verdict, ImageVerdict::Allowed);
+    EXPECT_EQ(ok.scale, 1.0);
+    EXPECT_EQ(ok.width, 2048);
+    EXPECT_TRUE(ok.message.empty()) << "nothing to tell the user";
+}
+
+TEST(AndroidImageLimits, RefusesWhatNoDownscaleSaves) {
+    ImageBudget budget;
+    budget.decodedBytesLimit = 64ull * 1024ull * 1024ull;
+    // 300 MP is past the engine's own ceiling, whatever the memory
+    const ImageSize huge = readImageSize(pngHeader(20000, 15000, 6));
+    EXPECT_EQ(decideImageImport(huge, budget).verdict, ImageVerdict::Refused);
+
+    // 8000x8000 fits the pixel ceiling but a 64 MB budget needs a 1/4 (16 MB) and a texture
+    // limit of 2048 needs a 1/4 too: a downscale, not a refusal
+    ImageBudget small;
+    small.decodedBytesLimit = 16ull * 1024ull * 1024ull;
+    small.maxTextureSize = 2048;
+    const ImageDecision decision = decideImageImport(readImageSize(pngHeader(8000, 8000, 6)), small);
+    EXPECT_EQ(decision.verdict, ImageVerdict::Downscale);
+    EXPECT_EQ(decision.width, 2000);
+
+    // a 16-bit pixel takes twice the memory for the same dimensions
+    ImageBudget tight;
+    tight.decodedBytesLimit = 8ull * 1024ull * 1024ull;
+    tight.maxTextureSize = 8192;
+    EXPECT_EQ(decideImageImport(readImageSize(pngHeader(2048, 2048, 6, 8)), tight).verdict, ImageVerdict::Downscale);
+    EXPECT_EQ(decideImageImport(readImageSize(pngHeader(2048, 2048, 6, 16)), tight).scale, 0.5);
+}
+
+TEST(AndroidImageLimits, NoBudgetMeansNoRefusal) {
+    ImageBudget none;   // a platform that did not say how much memory it has
+    const ImageDecision decision = decideImageImport(readImageSize(pngHeader(4096, 4096, 6)), none);
+    EXPECT_EQ(decision.verdict, ImageVerdict::Allowed) << "20 MB of 4096x4096 fits the default texture limit";
+
+    // an unknown size is the decoder's business, as before
+    EXPECT_EQ(decideImageImport(ImageSize(), none).verdict, ImageVerdict::Allowed);
+
+    // but the texture limit alone still applies when there is no byte limit
+    ImageDecision limited = decideImageImport(readImageSize(pngHeader(6000, 6000, 6)), ImageBudget{0, 2048, 0});
+    EXPECT_EQ(limited.verdict, ImageVerdict::Downscale);
+    EXPECT_EQ(limited.width, 1500);
+}
+
+TEST(AndroidImageLimits, ExtremesDoNotOverflow) {
+    // a header claiming the largest values INT allows: the product must not wrap
+    ImageSize absurd;
+    absurd.known = true;
+    absurd.width = 0x7FFFFFFF;
+    absurd.height = 0x7FFFFFFF;
+    absurd.channels = 4;
+    // (2^31-1)^2 * 4 is just inside 64 bits; a wider one saturates instead of wrapping small
+    EXPECT_GT(absurd.decodedBytes(), UINT64_MAX / 2) << "a wrapped product would be a small number";
+    absurd.width = 0x7FFFFFFF;
+    absurd.height = 0x7FFFFFFF;
+    absurd.bitDepth = 16;
+    EXPECT_EQ(absurd.decodedBytes(), UINT64_MAX) << "saturation, not a wrap";
+    EXPECT_EQ(decideImageImport(absurd, ImageBudget{1024, 4096, 0}).verdict, ImageVerdict::Refused);
+}
