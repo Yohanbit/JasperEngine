@@ -135,7 +135,7 @@ jobs:
             echo "::group::$log"
             # the build system's own errors first: that is what a build is fixed by
             grep -nE "^e: |error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong|Caused by:" "$log" \
-              | head -n 10 | while IFS= read -r line; do
+              | head -n 40 | while IFS= read -r line; do
                 printf '::error::%s\n' "${line//'%'/%25}"
               done
             echo "::endgroup::"

@@ -8,6 +8,20 @@ apply plugin: 'com.android.application'
 def jasperengineRoot = "../../../.."
 def jasperengineRootAbs = file(jasperengineRoot).toString()
 
+// JasperBootLog is shared with the game runtime and depends on nothing else in its package, so it
+// is copied in rather than the whole platform/android/java directory being a source root (which
+// would drag in MainActivity and the bridge).
+tasks.register('syncSharedJava', Sync) {
+    from(jasperengineRootAbs + '/platform/android/java/com/jaspergameengine/jasperengine/JasperBootLog.java') {
+        into 'com/jaspergameengine/jasperengine'
+    }
+    into layout.buildDirectory.dir("shared-java")
+}
+// afterEvaluate: preBuild is registered by the android plugin, which runs after this block
+afterEvaluate {
+    tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'syncSharedJava' }
+}
+
 android {
     compileSdk 36
     // the NDK AGP installs by default, pinned as app/build.gradle pins it: its Clang is above the
@@ -71,18 +85,11 @@ android {
 
     sourceSets {
         main {
-            // NOT platform/android/java wholesale: that directory holds the game runtime's
+            // Only this module's Java plus a synced copy of the boot report. NOT
+            // platform/android/java wholesale: that directory holds the game runtime's
             // MainActivity and its lifecycle bridge, which this app neither needs nor can load
-            // (they link the game's native library). Only the boot report is shared, and it
-            // depends on nothing else in the package.
-            java.srcDirs = [
-                'src/main/java',
-                new File(jasperengineRootAbs + '/platform/android/java').absolutePath
-            ]
-            java.includes = [
-                'com/jaspergameengine/jasperengine/JasperBootLog.java',
-                'com/jaspergameengine/jasperengine/editor/**'
-            ]
+            // (they link the game's native library).
+            java.srcDirs = ['src/main/java', layout.buildDirectory.dir("shared-java").get().asFile]
         }
     }
 
