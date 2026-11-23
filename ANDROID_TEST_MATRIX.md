@@ -24,7 +24,9 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path | 5 |
 
-Total: **60 cases, 60 pass, 0 skipped, 0 disabled.**
+| `AndroidImportTransfer` | same | the temporary's shape and mapping, resume, an already-complete partial, a partial longer than its source, a full volume, interrupted vs cancelled, a provider with no size, retry-of-a-retry | 10 |
+
+Total: **70 cases, 70 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -100,6 +102,21 @@ not repeated here.
 | `AndroidImportPreflight.AFortyTextureProjectIsOutOfMemoryOnAPhoneAndTheReportSaysWhichToShrink` | 20 × 2048² RGBA, budget 128 MiB → 0 broken, 320.0 MB resident, summary, `suggestDownscale` named | pass (**red**: advice was unstable between runs) |
 | `AndroidImportPreflight.AProjectInsideItsBudgetSaysNothingAboutMemory` | 2 × 256² under the budget → no summary | pass |
 
+### The interrupted copy (3 of these were found by the fuzzer, not by a test)
+
+| Case | What it pins |
+| --- | --- |
+| `TheCopyGoesToAHiddenTemporaryInTheSameFolder` | `assets/.photo.png.jeimport`, and `temporaryTarget` maps it back |
+| `ACopyThatStoppedResumesWhereItLeftOffInsteadOfStartingOver` | skip 6 MB, ask for one chunk, the last step asks for exactly the 3 MB left |
+| `APartialThatIsAlreadyTheWholeFileNeedsNoCopy` | a crash between the last write and the rename |
+| `ATemporaryLongerThanItsSourceStartsOverAndSaysSo` | the provider now reports a smaller file |
+| `AFullVolumeStopsTheCopyBeforeItLosesThePartial` | no write that would eat the reserve; the MB already there are named |
+| `AnInterruptedCopyKeepsItsPartialAndACancelledOneIsItsOwnOutcome` | Interrupted / Cancelled / Mismatched |
+| `AProviderThatGivesNoSizeCompletesWhenItsStreamEnds` | the stream's end is the only completion signal |
+| `ARenamedTemporaryIsNotMistakenForAnAsset` | a finished copy that crashed before the rename |
+| `ARetryOfARetryKeepsOneSuffix` | **fuzz**: `.x.jeimport` planned `.x.jeimport.jeimport`, unrecoverable |
+| `EveryPlanWritesSomethingTheScannerCanRecover` | **fuzz**: `"dir/"` and `""` produced `..jeimport`; and the target must equal what the temporary maps back to |
+
 ### The double-include guard
 
 The suite includes `AndroidAssetImport.h`, `AndroidImageLimits.h`, `AndroidImageOrientation.h` and
@@ -118,6 +135,10 @@ fixtures plus 400,000 random buffers — 1 in 7 behind a PNG magic, 1 in 11 behi
 ```
 ok: 400209 inputs, no out-of-bounds read and no impossible size
 ```
+
+The seventh run also plans transfers over the same noise (a name and four sizes cut out of the
+bytes), aborting if a plan writes something the scanner cannot recover or a step asks for more than
+is left. **It found three real defects**, listed above.
 
 The sixth run also drives `updatePinch`/`updateDrag`/`updateLongPress`/`updateTap` over noisy touch
 lists (duplicate pointers, out-of-order phases, up to five fingers) and aborts on a negative held
@@ -146,8 +167,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 60 tests from 8 test suites ran. (0 ms total)
-[  PASSED  ] 60 tests.
+[==========] 70 tests from 9 test suites ran. (0 ms total)
+[  PASSED  ] 70 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is

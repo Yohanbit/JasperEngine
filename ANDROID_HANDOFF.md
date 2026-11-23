@@ -104,6 +104,31 @@ if (turn.needed) {
 `android::orientedSize(width, height, orientation)` gives the size the picture is shown at, which is
 what a texture's aspect ratio must use.
 
+### 2d. The copy itself (a stream that can be cut short)
+
+```cpp
+// Java: an InputStream from the resolver, read into the temporary in chunks the plan names
+android::TransferPlan plan = android::planTransfer(name, sizeFromOpenableColumns, temporaryBytesOnDisk);
+file = open(plan.temporary, "wb");                       // same folder as the target
+stream.skip(plan.resumeFrom == temporaryBytesOnDisk ? 0 : temporaryBytesOnDisk);  // a resumed copy
+while (android::TransferStep step = android::transferStep(plan, copied, freeBytes, reserve, chunk),
+       step.outcome == android::TransferOutcome::Complete && step.copyBytes > 0) {
+    copy(stream, file, step.copyBytes);
+    copied += <what the read returned>;
+    if (<the stream ended>) break;
+}
+switch (android::settleTransfer(plan, copied, cancelled, streamEnded)) {
+    case android::TransferOutcome::Complete:   rename(plan.temporary, plan.target); break;
+    case android::TransferOutcome::Interrupted: keep(plan.temporary);   // resume next time
+    case android::TransferOutcome::Cancelled:   // the user's choice: drop it, or keep it to resume
+    default:                                    remove(plan.temporary); // Mismatched / OutOfSpace
+}
+```
+
+At start, walk the import folder with `android::isImportTemporary` and either resume what it holds
+(`android::temporaryTarget` names the asset) or drop it: otherwise a killed copy sits in the folder
+forever. That scan is also what `AssetTypes` needs to never see, which the leading dot gives.
+
 ### 3. Project place
 
 `android::classifyLocation(path, filesDir, externalFilesDir, treeUri, removable)` →

@@ -80,6 +80,13 @@ with no device to run it on.
 - `check_headers.py` now covers `engine/platform/` and includes every header **twice** — the class of
   defect (bug 10d) that no other gate could see.
 
+### `AndroidImportTransfer.h` (`1b7c9db7`)
+
+- A copy from a `content://` stream that ends early: hidden `.jeimport` temporary, resume, refusal
+  before a write that would eat the reserve, and Complete / Interrupted / Cancelled / Mismatched.
+  10 cases, 70 total. Three defects found by the fuzzer (a doubled suffix, `..jeimport`, and a target
+  that disagreed with the temporary's mapping).
+
 ## Still not done
 
 - Nothing here has run on a phone, an emulator or an APK: no SDK, no NDK, no `javac`, no Docker in

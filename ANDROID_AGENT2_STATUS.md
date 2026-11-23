@@ -53,6 +53,7 @@ headers added here follow it exactly, which also means:
 | 0c | Could the existing checks answer "will my project work on this phone"? | No: each answers one file and one question. Nothing composed them, and the failure modes the composition finds are exactly the ones a desktop never shows (accepted-then-undecodable WebP, a 183 MB decode, a sideways photo, a silently renamed duplicate) | verified (the report's first run, 4 tests red) |
 | 0b | Does anything read EXIF? | No: `grep -ri exif engine/core/texture` is empty and `TextureData` offers `flipVertical` only, so a portrait phone photo lands sideways with its width and height swapped | verified (grep + `TextureData.h:149`) |
 | 0 | What does the engine decode, really? | stb_image (PNG, JPEG, BMP, TGA, GIF, PSD, PNM, HDR, PIC; **no WebP, no HEIC/AVIF**), own KTX2/Basis path, SVG, tinyexr; SoLoud's dr_wav/dr_mp3/dr_flac/stb_vorbis. A phone shares photos as WebP and iPhone photos as HEIC | verified (grep + `stb_image.h` feature list + `soloud/src/audiosource/wav/`) |
+| 1b | What happens to an import the provider cut short? | Nothing distinguishes it from a finished asset: there is no temporary name, no resume, and no way to tell a half-copied file from a whole one, so a killed copy leaves a file the Project panel lists and the importer fails to decode | verified (grep: no temporary/partial notion in `engine/`) |
 | 1 | Does the runtime have an Android file system layer already? | Yes. `JasperEngineAndroid.cpp:206-235` maps `data://` to `getFilesDir()` and `asset://`/`lua://` through `AAssetManager` via `funopen`; `FileUtils.cpp:128` already refuses `asset://` writes on Android and knows only `data://` is on the file system. Saves work. | inferred (code read) |
 | 2 | What does an Android import lack? | A picked file is a `content://` URI, not a path. There is no URI → name → legal project name → free name → asset type path anywhere in `engine/` or `editor/` (`grep` for `content://`, percent-decoding, sanitizing, unique naming: nothing in the runtime; the editor's table `editor/asset/AssetTypes.cpp` maps extensions only). | inferred |
 | 3b | Does the engine have a long press or a double tap for the UI? | Not for the UI. `Touch::tapCount` counts quick taps but cannot tell a tap from a press-wander-release, and `InputActionAsset::holdTime` is a *mapped action* the UI never goes through. So a panel had no press-and-hold, which is half of how Android's own UI works | verified (grep + read) |
@@ -64,7 +65,7 @@ headers added here follow it exactly, which also means:
 ## 3. Implemented (this branch)
 
 All nine (eight headers) are free of Android headers, no new build wiring, C++20,
-`-Wall -Wextra -Werror` clean on GCC 12, and **60 gtest cases passing**. A runnable tool exposes the
+`-Wall -Wextra -Werror` clean on GCC 12, and **70 gtest cases passing**. A runnable tool exposes the
 whole thing: `tools/android-asset-report.py <project>`. Every header is included
 twice by the suite on purpose (see bug 10d). See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
