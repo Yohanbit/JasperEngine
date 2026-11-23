@@ -16,7 +16,9 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 | `AndroidProjectLayout` | same | path containment, project place, access flags, warnings, caches | 4 |
 | `AndroidImageLimits` | same | header sizes (7 formats), truncation, downscale, refusal, no-budget, overflow | 6 |
 
-Total: **31 cases, 31 pass, 0 skipped, 0 disabled.**
+| `AndroidAssetImport` (decode/playback support) | same | WebP gap, the formats the engine reads, the audio decoder set | 3 |
+
+Total: **34 cases, 34 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -58,6 +60,10 @@ not repeated here.
 | `AndroidImageLimits.NoBudgetMeansNoRefusal` | no byte limit ⇒ allowed; unknown header ⇒ decoder's business as today; texture limit still applies | pass |
 | `AndroidImageLimits.ExtremesDoNotOverflow` | 0x7FFFFFFF² does not wrap; 16-bit saturates | pass (**red**: my first assertion assumed saturation one step too early) |
 
+| `AndroidAssetImport.WebPIsAcceptedButFlaggedAsUndecodable` | a WebP classifies as a Texture *and* the import says it must become PNG | pass (**red**: the test caught that my `std::string("RIFF\0...")` literal truncated at the NUL and WebP was `Unknown`) |
+| `AndroidAssetImport.TheFormatsTheEngineReadsAreSupported` | PNG/JPEG/GIF/PSD/HDR/KTX2 supported; text goes to the decoder; AVIF unsupported | pass (**red**: AVIF was `Unknown`, indistinguishable from any file, before `ImportKind::IsoBmff`) |
+| `AndroidAssetImport.AudioSupportFollowsTheDecoderSet` | WAV/OGG/MP3/FLAC supported (the four decoders linked); M4A needs MediaCodec, else refused with a sentence | pass |
+
 ### Fuzzing (verified, sanitizers)
 
 `/tmp/fuzz.cpp` (not committed; reproduce below) feeds every truncation of eight real header
@@ -69,13 +75,16 @@ fixtures plus 400,000 random buffers — 1 in 7 behind a PNG magic, 1 in 11 behi
 ok: 400209 inputs, no out-of-bounds read and no impossible size
 ```
 
+The second run also drove `decodeSupportOf`, `playbackSupportOf` and `decideImageImport` over the
+same inputs (the ISO-BMFF path reads bytes 4..7, which is where a truncation bites).
+
 ## How it was run (verified)
 
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 31 tests from 5 test suites ran. (0 ms total)
-[  PASSED  ] 31 tests.
+[==========] 34 tests from 5 test suites ran. (0 ms total)
+[  PASSED  ] 34 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
@@ -95,6 +104,7 @@ Docker, so that lane is CI's).
 | audio extension (bug 3) | `ImportedAssetNameIsAnAssetName` | `clip.wav` for an Ogg |
 | control byte in a cut (bug 4) | `SanitizeKeepsUnicodeAndDropsControls` | `abc.tx` for an 8-byte name |
 | `ExtremesDoNotOverflow` | a saturating `decodedBytes()` assumed where the product still fits |
+| `WebPIsAcceptedButFlaggedAsUndecodable` | a `std::string` literal truncated at its first NUL, so the WebP fixture was 9 bytes |
 | missing `<cstddef>` (bug 5) | compiling `AndroidStorageSpace.h` alone | `size_t has not been declared` |
 
 ## Not covered (and why)

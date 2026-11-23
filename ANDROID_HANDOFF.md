@@ -64,6 +64,52 @@ opaque `document/1234` becomes `_1234.png` and not an import the editor cannot o
 `android::accessFor(...)`. Use `access.warning` verbatim in the project picker; `access.atomicRename`
 decides whether a save may rely on `io::writeFileAtomic`.
 
+## 4. A crash in the core file I/O, found but not touched (yours)
+
+`engine/core/io/Data.cpp` is the main agent's core, so this is reported, not edited. Reproduced
+under ASan+UBSan on the host (`/tmp/datarepro2.cpp`, a two-line program):
+
+```
+jasperengine::Data empty(nullptr, 0, true, false);
+empty.seek(-4);
+empty.read(out, 8);     // AddressSanitizer: SEGV on unknown address ... in Data::read (Data.cpp:59)
+```
+
+Cause, `Data::seek`:
+
+```cpp
+void Data::seek(int aOffset) {
+    if (aOffset >= 0) offset = aOffset;
+    else              offset = dataLength + aOffset;   // 0 + (-4) wraps to 4294967292
+    if (offset > dataLength - 1)                       // dataLength is unsigned: 0 - 1 wraps too
+        offset = dataLength - 1;                       // ...so this never runs, and offset is huge
+}
+```
+
+`Data::read` then does `memcpy(aDst, dataPtr + offset, ...)` with the wrapped offset. Reachable from
+script: `FileData.newFile(false)` gives a `Data`, `seek` is bound in `IOClassesLua.cpp:457`, and
+`read8`/`read16`/`read32`/`readString` follow. A truncated or empty asset is the everyday way to
+reach it — on a phone, a provider handing over a partial file makes one.
+
+The patch (three lines, no behaviour change for a valid seek):
+
+```cpp
+void Data::seek(int aOffset) {
+    if (dataLength == 0){ offset = 0; return; }
+    long long target = aOffset >= 0 ? (long long)aOffset : (long long)dataLength + aOffset;
+    if (target < 0) target = 0;
+    const long long last = (long long)dataLength - 1;
+    if (target > last) target = last;
+    offset = (unsigned int)target;
+}
+```
+
+and, so a caller that reads before seeking cannot do it either, a guard at the top of `read`:
+`if (!dataPtr || offset >= dataLength || aBytes == 0) return 0;`.
+
+A test belongs beside `AssetIOServiceTest`/`DataOpenTest` in `engine/tests/core/io/` (an empty `Data`
+and a 4-byte one, `seek(-1)` / `seek(-100)` / `seek(past)` then `read`, no crash and `pos()` sane).
+
 ## Nothing here is device-verified, on purpose
 
 Say so in the PR body if you integrate it: the four subsystems are verified at the SDK-free layer

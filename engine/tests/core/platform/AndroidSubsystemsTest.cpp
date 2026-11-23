@@ -726,3 +726,61 @@ TEST(AndroidImageLimits, ExtremesDoNotOverflow) {
     EXPECT_EQ(absurd.decodedBytes(), UINT64_MAX) << "saturation, not a wrap";
     EXPECT_EQ(decideImageImport(absurd, ImageBudget{1024, 4096, 0}).verdict, ImageVerdict::Refused);
 }
+
+// ---- what the engine can decode and play
+
+TEST(AndroidAssetImport, WebPIsAcceptedButFlaggedAsUndecodable) {
+    const auto bytes = textBytes(std::string("RIFF\0\0\0\0WEBPVP8 ", 16));
+    // the type is right, so the file lands in the assets folder as a texture...
+    EXPECT_EQ(assetTypeForImport("photo.webp", bytes), AssetType::Texture);
+    // ...but this build has no WebP decoder, and the import says so before anything is copied
+    const ImageSupportAnswer answer = decodeSupportOf("photo.webp", bytes, true);
+    EXPECT_EQ(answer.support, ImageSupport::NeedsConversion) << "Android's BitmapFactory decodes WebP";
+    EXPECT_EQ(answer.format, ImageFormat::Webp);
+    ASSERT_NE(answer.convertTo, nullptr);
+    EXPECT_STREQ(answer.convertTo, "png");
+    EXPECT_FALSE(answer.reason.empty());
+
+    // on a host with no platform decoder the same file is a conversion too, not a silent accept
+    EXPECT_EQ(decodeSupportOf("photo.webp", bytes, false).support, ImageSupport::NeedsConversion);
+}
+
+TEST(AndroidAssetImport, TheFormatsTheEngineReadsAreSupported) {
+    EXPECT_EQ(decodeSupportOf("a.png", bytesOf({0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}), true).support,
+              ImageSupport::Supported);
+    EXPECT_EQ(decodeSupportOf("a.jpg", bytesOf({0xFF, 0xD8, 0xFF}), true).support, ImageSupport::Supported);
+    EXPECT_EQ(decodeSupportOf("a.gif", textBytes("GIF89a"), true).support, ImageSupport::Supported);
+    EXPECT_EQ(decodeSupportOf("a.psd", textBytes("8BPS"), true).support, ImageSupport::Supported);
+    EXPECT_EQ(decodeSupportOf("a.hdr", textBytes("#?RADIANCE"), true).support, ImageSupport::Supported);
+    EXPECT_EQ(decodeSupportOf("a.ktx2", bytesOf({0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30}), true).support,
+              ImageSupport::Supported);
+    // a text file, or a container with no magic of its own: the decoder decides, as before
+    EXPECT_EQ(decodeSupportOf("a.json", textBytes("{}"), true).support, ImageSupport::Supported);
+    // a format nothing reads
+    EXPECT_EQ(decodeSupportOf("a.avif", bytesOf({0, 0, 0, 0x1C, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f'}), true).support,
+              ImageSupport::Unsupported);
+}
+
+TEST(AndroidAssetImport, AudioSupportFollowsTheDecoderSet) {
+    // dr_wav, stb_vorbis, dr_mp3 and dr_flac are all linked
+    EXPECT_EQ(playbackSupportOf("a.wav", textBytes(std::string("RIFF\0\0\0\0WAVEfmt ", 16)), false).support,
+              MediaSupport::Supported);
+    EXPECT_EQ(playbackSupportOf("a.ogg", textBytes(std::string("OggS\0\0\0\0", 8)), false).support,
+              MediaSupport::Supported);
+    EXPECT_EQ(playbackSupportOf("a.mp3", textBytes("ID3"), false).support, MediaSupport::Supported);
+    EXPECT_EQ(playbackSupportOf("a.flac", bytesOf({0x66, 0x4C, 0x61, 0x43}), false).support,
+              MediaSupport::Supported);
+    // an extension-less recording whose bytes read as one of the four
+    EXPECT_EQ(playbackSupportOf("recording", bytesOf({0x66, 0x4C, 0x61, 0x43}), false).support,
+              MediaSupport::Supported);
+
+    // a voice memo a phone's share sheet offers: no engine decoder
+    const MediaSupportAnswer aac = playbackSupportOf("memo.m4a", bytesOf({0, 0, 0, 0x20, 'f', 't', 'y', 'p', 'M', '4', 'A'}), true);
+    EXPECT_EQ(aac.support, MediaSupport::NeedsConversion);
+    ASSERT_NE(aac.convertTo, nullptr);
+    EXPECT_STREQ(aac.convertTo, "wav");
+    // and without the platform's codecs it is refused with a sentence that says what to export
+    const MediaSupportAnswer refused = playbackSupportOf("memo.m4a", bytesOf({0, 0, 0, 0x20, 'f', 't', 'y', 'p'}), false);
+    EXPECT_EQ(refused.support, MediaSupport::Unsupported);
+    EXPECT_NE(refused.reason.find("WAV"), std::string::npos) << refused.reason;
+}

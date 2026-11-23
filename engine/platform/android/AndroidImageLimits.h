@@ -20,6 +20,8 @@
 // Unknown and the policy lets the decoder decide as it does today (nothing is refused that was
 // not refused before).
 
+#include "AndroidAssetImport.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -306,6 +308,106 @@ namespace jasperengine::android {
         return decision;
     }
 
+    // (the second block below adds decode support)
+
 }
 
 #endif // ANDROID_IMAGE_LIMITS_H
+
+// ---- what this engine can actually decode
+//
+// The engine decodes a texture through the vendored stb_image (engine/core/texture/TextureData.cpp,
+// `stbi_load_from_memory`), plus its own KTX2/Basis path and the SVG/EXR/HDR decoders beside it.
+// stb_image reads PNG, JPEG, BMP, TGA, GIF, PSD, PNM, HDR and PIC; it has **no WebP decoder**, and
+// no HEIC/AVIF one either. `.webp` is nevertheless in the editor's Texture extensions
+// (editor/asset/AssetTypes.cpp), so a phone photo shared as a WebP is accepted by an import, gets a
+// texture name, and fails later at decode with "Error loading texture" — on a phone, where the
+// share sheet offers WebP for photos.
+//
+// So an import asks first. This is the one place that knows the answer without a GPU or a decode:
+// the same verdict `assetTypeForImport` gives, plus whether a decoder exists for those bytes.
+
+namespace jasperengine::android {
+
+    enum class ImageSupport : uint8_t {
+        // a decoder in this build reads it
+        Supported = 0,
+        // no decoder for the container; `convertTo` names a container a decoder does read, and the
+        // import must convert before it writes (a phone can do it through BitmapFactory, which
+        // decodes WebP and HEIC/AVIF on Android 12+)
+        NeedsConversion,
+        // no decoder, and no conversion either (a format nothing in the engine or the platform
+        // reads): the import is refused with `reason`
+        Unsupported,
+    };
+
+    struct ImageSupportAnswer {
+        ImageSupport support = ImageSupport::Supported;
+        ImageFormat format = ImageFormat::Unknown;
+        // for NeedsConversion: "png", the container the import should be converted to
+        const char* convertTo = nullptr;
+        // a sentence for the user (an empty one when Supported)
+        std::string reason;
+    };
+
+    // Whether the engine can decode the bytes at `path` (its extension only matters when the bytes
+    // say nothing). `androidBitmapFactory` is what the caller knows about the device: Android's own
+    // `BitmapFactory` decodes WebP on every API level this engine targets, and HEIC/AVIF from 12
+    // (API 31), so the platform can convert what stb_image cannot read.
+    inline ImageSupportAnswer decodeSupportOf(std::string_view fileName, std::span<const uint8_t> bytes,
+                                             bool androidBitmapFactory) {
+        ImageSupportAnswer answer;
+        (void)fileName;   // the bytes decide; the extension matters only for a format with no magic
+        const ImportKind kind = kindFromMagic(bytes);
+        auto formatOf = [](ImportKind k) {
+            switch (k) {
+                case ImportKind::Png: return ImageFormat::Png;
+                case ImportKind::Jpeg: return ImageFormat::Jpeg;
+                case ImportKind::Gif: return ImageFormat::Gif;
+                case ImportKind::Bmp: return ImageFormat::Bmp;
+                case ImportKind::Webp: return ImageFormat::Webp;
+                case ImportKind::Psd: return ImageFormat::Psd;
+                case ImportKind::Tga: return ImageFormat::Tga;
+                default: return ImageFormat::Unknown;
+            }
+        };
+        answer.format = formatOf(kind);
+
+        switch (kind) {
+            case ImportKind::Png:
+            case ImportKind::Jpeg:
+            case ImportKind::Gif:
+            case ImportKind::Bmp:
+            case ImportKind::Psd:
+            case ImportKind::Tga:
+            case ImportKind::Hdr:
+            case ImportKind::Ktx2:
+            case ImportKind::Unknown:
+                // Unknown is a text format, a container with no magic of its own, or not an image:
+                // the decoder decides, as before
+                answer.support = ImageSupport::Supported;
+                return answer;
+            case ImportKind::Webp:
+                if (androidBitmapFactory) {
+                    answer.support = ImageSupport::NeedsConversion;
+                    answer.convertTo = "png";
+                    answer.reason = "this build has no WebP decoder; the photo is converted to PNG when it is imported";
+                } else {
+                    answer.support = ImageSupport::NeedsConversion;
+                    answer.convertTo = "png";
+                    answer.reason = "this build has no WebP decoder; the photo must be converted to PNG before it can be used";
+                }
+                return answer;
+            case ImportKind::OpenExr:
+                // tinyexr is linked, and TextureData has a float decoder registry for it
+                answer.support = ImageSupport::Supported;
+                return answer;
+            default:
+                break;
+        }
+        answer.support = ImageSupport::Unsupported;
+        answer.reason = "no decoder in this engine reads this image format; export it as PNG or JPEG";
+        return answer;
+    }
+
+}

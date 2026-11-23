@@ -238,6 +238,12 @@ namespace jasperengine::android {
         Ttf,      // 00 01 00 00 or "true"
         Otf,      // "OTTO"
         Aseprite, // 20 A5 E0 A1 (the header's magic, little endian as stored)
+        // an ISO base media file: HEIC and AVIF (images), M4A/AAC (audio), MP4 and MOV (video) all
+        // begin with a box whose type is "ftyp" at byte 4. Which one it is is in the brand that
+        // follows, which the container's own reader parses; here it is enough to know there is no
+        // engine decoder for it (none of stb_image, SoLoud or the video backends reads it as a
+        // texture or a clip).
+        IsoBmff,
     };
 
     namespace detail {
@@ -282,6 +288,8 @@ namespace jasperengine::android {
         if (startsWithText(bytes, "OggS")) return ImportKind::Ogg;
         if (startsWithText(bytes, "fLaC")) return ImportKind::Flac;
         if (startsWithBytes(bytes, {0x20, 0xA5, 0xE0, 0xA1})) return ImportKind::Aseprite;
+        // the box size is 4 bytes and its type at 4: this is the only signature at that offset
+        if (bytes.size() >= 12 && startsWithText(bytes.subspan(4), "ftyp")) return ImportKind::IsoBmff;
         if (startsWithBytes(bytes, {0x00, 0x01, 0x00, 0x00}) || startsWithText(bytes, "true")) return ImportKind::Ttf;
         if (startsWithText(bytes, "OTTO")) return ImportKind::Otf;
         // "BM" is two ASCII letters and short: last, so nothing above is read as a BMP
@@ -343,6 +351,7 @@ namespace jasperengine::android {
             case ImportKind::Tga:
             case ImportKind::Gltf:
             case ImportKind::Obj:
+            case ImportKind::IsoBmff:
                 break;
         }
 
@@ -435,6 +444,73 @@ namespace jasperengine::android {
         const std::string wanted = extension.empty() ? stem : stem + "." + extension;
         // the extension is known and wanted as it is: a cut keeps it, nothing is added
         return sanitizeFileName(wanted, options);
+    }
+
+}
+
+// ---- what this engine can actually play
+//
+// The audio decoder set is the vendored SoLoud's: dr_wav, dr_mp3, dr_flac and stb_vorbis
+// (engine/libs/soloud/src/audiosource/wav), which is exactly the four the editor's Audio
+// extensions list (editor/asset/AssetTypes.cpp). Unlike the image side there is no decoder gap
+// today; the check exists so an import cannot introduce one (a `.opus`, `.m4a` or `.aac` file is
+// offered by a phone's share sheet for a voice memo, and none of those has a decoder here).
+//
+// `ImportKind::Unknown` is an extension-less file whose bytes say nothing either: the extension
+// decides, and the caller's own loader reports it as it does today.
+
+namespace jasperengine::android {
+
+    enum class MediaSupport : uint8_t {
+        Supported = 0,
+        // no decoder; `convertTo` names a container one reads ("wav"), and the platform's own
+        // MediaCodec can write it (Android decodes AAC/Opus/M4A and encodes WAV through its
+        // `MediaExtractor`/`MediaCodec` pair)
+        NeedsConversion,
+        Unsupported,
+    };
+
+    struct MediaSupportAnswer {
+        MediaSupport support = MediaSupport::Supported;
+        const char* convertTo = nullptr;
+        std::string reason;
+    };
+
+    // Whether the engine can play the audio bytes at `fileName`; `androidMediaCodec` is what the
+    // caller knows about the device (Android can decode anything its codecs list, and re-encode to
+    // WAV), so a format without an engine decoder is a conversion there and a refusal elsewhere.
+    inline MediaSupportAnswer playbackSupportOf(std::string_view fileName, std::span<const uint8_t> bytes,
+                                                bool androidMediaCodec) {
+        MediaSupportAnswer answer;
+        switch (kindFromMagic(bytes)) {
+            case ImportKind::Wav:
+            case ImportKind::Ogg:
+            case ImportKind::Mp3:
+            case ImportKind::Flac:
+                return answer;
+            case ImportKind::Unknown: {
+                // no magic: the extension is all there is. SoLoud's decoders read these four.
+                const std::string extension = extensionOf(fileName);
+                if (extension == "wav" || extension == "ogg" || extension == "mp3" || extension == "flac") {
+                    return answer;
+                }
+                break;
+            }
+            case ImportKind::IsoBmff:
+                // M4A/AAC and an MP4's audio track: no SoLoud decoder reads them
+                break;
+            default:
+                break;
+        }
+        if (androidMediaCodec) {
+            answer.support = MediaSupport::NeedsConversion;
+            answer.convertTo = "wav";
+            answer.reason = "this build has no decoder for this audio; the phone converts it to WAV on import";
+        } else {
+            answer.support = MediaSupport::Unsupported;
+            answer.reason = "no decoder in this engine reads this audio; export it as WAV, OGG, MP3 or FLAC";
+        }
+        return answer;
     }
 
 }

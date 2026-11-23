@@ -47,6 +47,7 @@ headers added here follow it exactly, which also means:
 
 | # | Question | Answer (evidence) | Label |
 | --- | --- | --- | --- |
+| 0 | What does the engine decode, really? | stb_image (PNG, JPEG, BMP, TGA, GIF, PSD, PNM, HDR, PIC; **no WebP, no HEIC/AVIF**), own KTX2/Basis path, SVG, tinyexr; SoLoud's dr_wav/dr_mp3/dr_flac/stb_vorbis. A phone shares photos as WebP and iPhone photos as HEIC | verified (grep + `stb_image.h` feature list + `soloud/src/audiosource/wav/`) |
 | 1 | Does the runtime have an Android file system layer already? | Yes. `JasperEngineAndroid.cpp:206-235` maps `data://` to `getFilesDir()` and `asset://`/`lua://` through `AAssetManager` via `funopen`; `FileUtils.cpp:128` already refuses `asset://` writes on Android and knows only `data://` is on the file system. Saves work. | inferred (code read) |
 | 2 | What does an Android import lack? | A picked file is a `content://` URI, not a path. There is no URI → name → legal project name → free name → asset type path anywhere in `engine/` or `editor/` (`grep` for `content://`, percent-decoding, sanitizing, unique naming: nothing in the runtime; the editor's table `editor/asset/AssetTypes.cpp` maps extensions only). | inferred |
 | 3 | Does the engine report multi-finger gestures? | Per finger only (`Input.h:228-245` `Touch`, `getTouches`, phases, deltas). Nothing computes two-finger distance/midpoint/angle; `grep -i pinch engine/core` is empty. Android's `NativeEngine.cpp:1630-1660` feeds each pointer correctly, so the *data* is there and only the derived gesture is missing. | inferred |
@@ -56,8 +57,8 @@ headers added here follow it exactly, which also means:
 
 ## 3. Implemented (this branch)
 
-All five are headers with no Android header, no new build wiring, C++20, `-Wall -Wextra -Werror`
-clean on GCC 12, and 31 gtest cases passing. See `ANDROID_TEST_MATRIX.md` for the evidence of every
+All six (five headers) are free of Android headers, no new build wiring, C++20, `-Wall -Wextra -Werror`
+clean on GCC 12, and 34 gtest cases passing. See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
 
 | File | What it provides | State |
@@ -79,7 +80,12 @@ case and the red control.
    embedded NUL). Found by `SanitizeKeepsUnicodeAndDropsControls`.
 5. `AndroidStorageSpace.h` was not self-sufficient (`<cstddef>` missing) — found by compiling each
    header alone, which `tools/check_headers.py` does not do for `engine/platform/`.
-6. `decodedBytes()` was assumed to saturate on the largest possible header (0x7FFFFFFF squared times
+6. WebP was classified, named and accepted as a Texture although **no decoder in this tree reads
+   WebP** (`grep stbi__webp` is empty; `.webp` is nevertheless in `editor/asset/AssetTypes.cpp`). Not a
+   bug in my code — a gap in the port that the import can now report instead of failing at decode.
+7. AVIF/HEIC and M4A/AAC were indistinguishable from any other file (all are ISO-BMFF, `ftyp` at
+   byte 4) and were classified `Unknown`. Added `ImportKind::IsoBmff`.
+8. `decodedBytes()` was assumed to saturate on the largest possible header (0x7FFFFFFF squared times
    4 is just *inside* 64 bits, so it does not saturate there); the test now checks the real bound.
 
 ## 4. Dependencies on the integration agent (no file of theirs is modified)
