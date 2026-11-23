@@ -436,6 +436,17 @@ void StdioClient::close() {
 
 StdioClient::StdioClient(const fs::path& executable, const std::vector<std::string>& args, const fs::path& workdir)
     : stderrLog(workdir / "editor.stderr.log") {
+#ifdef __ANDROID__
+    // Bionic does not declare posix_spawn below API 28, and the restriction is not a nuisance to
+    // work around: an Android app may not execute a program it did not ship, so there is no editor
+    // binary on the device to start. The constructor throws before any pipe is opened, which gives
+    // a caller this sentence instead of a link error or a half-built transport.
+    (void)executable;
+    (void)args;
+    throw ClientError(Connection,
+                      "an Android app cannot start the editor as a child process: the platform does not "
+                      "allow executing a program the app did not ship");
+#else
     // writing to an editor that is gone must be an error, not a signal
     std::signal(SIGPIPE, SIG_IGN);
     int input[2];
@@ -483,6 +494,7 @@ StdioClient::StdioClient(const fs::path& executable, const std::vector<std::stri
     childPid = static_cast<long>(pid);
     toChild = input[1];
     fromChild = output[0];
+#endif
 }
 
 bool StdioClient::exited(int& exitCode) {
