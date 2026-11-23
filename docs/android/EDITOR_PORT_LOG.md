@@ -108,10 +108,21 @@ for the day a Java-side value can be handed to it.
 | 45184673689 | 01d36ff1 | link: the same 12, then `AAssetManager_open` |
 | 45215268485 | bb4a0712 | **APK produced**, 105 917 484 bytes, installed and running on the device |
 | 45230610321 | 2a1b8cac | #11 and #12; **BUILD SUCCESSFUL in 47m 34s**, no errors |
+| 45241401726 | 67cae670 | cancelled: superseded by the run below before its editor job finished |
+| 45241401726's editor job | 67cae670 | **gradle error in 4 min**: `EditorActivity.java:82: cannot find symbol` — the swipe constant is on `WindowInsetsControllerCompat`, not `WindowInsetsCompat` (see the note below) |
+| 45241989505 | 2a7a68c1 | #13-#16 and the density scale; **built**, `jasperengine-editor-apk-arm64-v8a` 105 926 471 bytes, id 14856574171, zero `error:` lines in the digest |
+
+The one failure between them is worth keeping, because it is what the annotations are for: a wrong
+class qualifier on a single line is invisible in a job summary that says `success` (the step has
+`continue-on-error`), and the digest named the file, the line and the symbol in four minutes. The
+build before it had taken 47.
 
 ## What is still open
 
 - Storage Access Framework: importing a project from the phone's storage is a Java intent, not a path.
 - A touch-first re-layout of the dock: the panels are usable but sized for a mouse.
+- An APK whose interaction regressed is worse than no APK: #14 shows that the difference between
+  "taps work" and "nothing moves" was one queued position in a motion event, so any change to
+  `processMotionEvents` needs a drag tested on the device, not just a tap.
 - Building a game on the phone: `CommandRunner` and `ProcessExec` correctly refuse to exec on
   Android, so the phone edits and previews; it does not compile the APK of a project.
