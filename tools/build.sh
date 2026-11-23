@@ -843,8 +843,13 @@ android)
         cd engine/workspaces/androidstudio || { echo 'android: no androidstudio workspace in the container' >&2; exit 5; }
         ndk=\$(sed -n 's/^ *ndkVersion = \"\\(.*\\)\"\$/\\1/p' app/build.gradle)
         [[ -n \"\$ndk\" ]] || { echo 'no ndkVersion in app/build.gradle' >&2; exit 1; }
+        # The image installs the SDK but not the NDK: docker/android.Dockerfile says AGP installs any
+        # missing NDK/CMake, and it does. Installing it here with sdkmanager was wrong as well as
+        # silent -- sdkmanager does not accept the licence that ndk;\$ndk needs, so the step could
+        # fail before gradlew ever ran and leave only the host's \"no APK\" line behind. The version
+        # is still read from build.gradle, because AGP will pin the same one.
         if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
-            /src/tools/ci/retry.sh bash -c \"sdkmanager --install 'ndk;\$ndk' > /dev/null && test -f '\$ANDROID_HOME/ndk/\$ndk/source.properties'\"
+            echo \"android: NDK \$ndk is not in the image; AGP installs it on the first build\" >&2
         fi
         # build/.cache/identity.args names this APK (tools/android/release_identity.py --gradle):
         # one -P per line, read with mapfile so a value may contain a space ("Android RC1").
