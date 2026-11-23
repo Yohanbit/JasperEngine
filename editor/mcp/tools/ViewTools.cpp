@@ -93,6 +93,9 @@
         #include <GL/gl.h>
     #elif defined(__APPLE__)
         #include <OpenGL/gl.h>
+    #elif defined(__ANDROID__)
+        // Android ships no desktop GL: its GL is OpenGL ES, declared by GLES3/gl3.h
+        #include <GLES3/gl3.h>
     #else
         #include <GL/gl.h>
     #endif
