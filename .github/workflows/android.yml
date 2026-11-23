@@ -1,26 +1,132 @@
 name: Android APK
+
+# The engine sample project's APK (engine/project), built by the same entry point the `android` lane of
+# ci.yml uses: tools/build.sh android, which runs Gradle inside docker/android.Dockerfile (JDK 21, the
+# SDK and the NDK). Unlike that lane, this one keeps its own ccache and Gradle caches between runs, on
+# every event: the lane's entries live on main's keys and a dispatch could only restore them.
+#
+# arm64-v8a is the ABI of every phone made since 2017 (and of every device Google Play serves); x86_64 is
+# the emulator's. One ABI builds in about a third of the time of the export's four.
 on:
   workflow_dispatch:
+    inputs:
+      abis:
+        description: ABIs of the APK
+        type: choice
+        default: arm64-v8a
+        options:
+          - arm64-v8a
+          - arm64-v8a,x86_64
+          - arm64-v8a,armeabi-v7a,x86,x86_64
+  push:
+    branches: [main]
+    paths:
+      - 'engine/**'
+      - 'libs/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'docker/android.Dockerfile'
+      - 'tools/build.sh'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+  actions: write  # the prune step deletes this lane's older ccache entries (the repository's 10 GB)
+
+# one run per ref: a new dispatch supersedes the one still building
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
+    name: APK (${{ inputs.abis || 'arm64-v8a' }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # a cold build of every ABI takes the ci.yml lane's 180; arm64-v8a alone, well under 100
+    timeout-minutes: 180
+    env:
+      JASPER_CI_REPRO: tools/build.sh android
+      ANDROID_ABIS: ${{ inputs.abis || 'arm64-v8a' }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Start
+        run: echo "JASPER_CI_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # removes the runner's unused Android SDK, .NET, GHC and Docker images when / is short of the
+      # job's 65 GB (a fresh runner has about 87 free, so usually nothing happens)
+      - uses: ./.github/actions/free-disk
         with:
-          submodules: recursive
-          lfs: true
-      - name: Liberar espacio
-        run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
-          df -h
-      - name: Compilar
-        run: |
-          chmod +x tools/build.sh
-          tools/build.sh android
+          need: 65
+
+      # ghcr.io/<owner>/jasperengine-android-build:<tag>, pulled when images.yml pushed it, else built
+      # here from the registry's layer cache
+      - uses: ./.github/actions/image
+        id: image
+        with:
+          target: android
+
+      # restores the newest ccache-android-<toolchain>- entry into build/.cache/ccache, which
+      # tools/build.sh mounts at /ccache; sets CCACHE_DIR, JASPER_CCACHE_KEY and JASPER_CCACHE_MARKER
+      - uses: ./.github/actions/ccache-restore
+        with:
+          lane: android
+          # the lane's working set was 0.3G for one ABI in ci.yml; a second one does not double it
+          # (the engine's and the vendored libraries' objects are shared)
+          max-size: 1G
+          toolchain: ${{ steps.image.outputs.tag }}
+
+      # Gradle's distribution and dependency cache (tools/build.sh sets GRADLE_USER_HOME=build/.cache/gradle)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/.cache/gradle/caches
+            build/.cache/gradle/wrapper
+          key: gradle-${{ steps.image.outputs.tag }}-${{ hashFiles('engine/workspaces/androidstudio/**/*.gradle', 'engine/workspaces/androidstudio/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ steps.image.outputs.tag }}-
+
+      - name: APK
+        run: tools/ci/logged.sh android-build "tools/build.sh android"
+
       - name: Buscar APK
-        run: find build -name "*.apk" -exec ls -lh {} \;
-      - uses: actions/upload-artifact@v4
+        if: always()
+        run: |
+          find build/android -name '*.apk' -exec ls -lh {} \; || true
+          [[ -f build/test-results/android-build.log ]] && tail -n 60 build/test-results/android-build.log || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: success()
         with:
-          name: jasperengine-apk
-          path: build/**/*.apk
+          name: jasperengine-apk-${{ inputs.abis || 'arm64-v8a' }}
+          path: build/android/*.apk
+          # warns rather than failing: the run that stops early has already gone red
+          if-no-files-found: warn
+          retention-days: 30
+
+      # every event saves here (ci.yml's ccache-save only saves on main's pushes and the schedule), so a
+      # dispatch is warm from the second run on. The whole directory, not ccache-save's trimmed working set:
+      # that script's ccache runs in the image as this job's user and cannot write to an Actions cache.
+      - name: Save ccache entry
+        if: success() || failure()
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/.cache/ccache
+          key: ${{ env.JASPER_CCACHE_KEY }}
+
+      # Actions caches share the repository's 10 GB with every lane of ci.yml (docs/testing.md "Build
+      # speed": an overfull repository evicted the plan inputs and a lane's ccache); this lane keeps one
+      # entry per cache key, the newest
+      - name: Delete the older ccache entries
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key "ccache-android-" --limit 100 \
+              --json id,key --jq ".[] | select(.key != \"$JASPER_CCACHE_KEY\") | .id" |
+              while read -r id; do gh cache delete --repo "$GITHUB_REPOSITORY" "$id"; done
