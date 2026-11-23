@@ -262,10 +262,15 @@ namespace jasperengine::editor {
         if (!gAndroidApp || !gAndroidApp->activity)
             return;
         if (show){
-            // The engine's own call and flags (NativeEngine.cpp:549). IME_ACTION_NONE and
-            // IME_FLAG_NO_FULLSCREEN come from GameActivity.h: declaring them here would shadow
-            // the macros and fail to compile.
-            GameActivity_setImeEditorInfo(gAndroidApp->activity, InputType_dot_TYPE_CLASS_TEXT,
+            // The engine's own call and flags, declared here the same way NativeEngine.cpp:544-548
+            // declares them: GameActivity.h does NOT define InputType_* (it is an Android
+            // android.text.InputType value, not a GameActivity constant), so naming it without a
+            // declaration is an undeclared-identifier error, not a working call.
+            // https://developer.android.com/reference/android/text/InputType
+            constexpr int TYPE_CLASS_TEXT = 1;
+            constexpr int IME_ACTION_NONE = 1;
+            constexpr int IME_FLAG_NO_FULLSCREEN = 33554432;
+            GameActivity_setImeEditorInfo(gAndroidApp->activity, TYPE_CLASS_TEXT,
                                           IME_ACTION_NONE, IME_FLAG_NO_FULLSCREEN);
             GameActivity_showSoftInput(gAndroidApp->activity, 0);
         }else{

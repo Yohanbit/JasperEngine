@@ -46,12 +46,24 @@ namespace {
     }
 
     fs::path homeDirectory() {
+#if defined(__ANDROID__)
+        // A phone has no HOME and current_path() is "/", which an app may not write: every new
+        // project would be created where it cannot be. EditorPaths.java exports the app's own
+        // files directory for exactly this, and nothing was reading it, so the Project Hub's
+        // "New Project" pointed at the filesystem root. The export is the parent of the folder
+        // defaultLocation() appends, so it becomes the home here.
+        if (const char* projects = std::getenv("JASPERENGINE_ANDROID_PROJECTS_DIR"); projects && *projects) {
+            return fs::path(projects).parent_path();
+        }
+        return fs::current_path();
+#else
 #ifdef _WIN32
         const char* home = std::getenv("USERPROFILE");
 #else
         const char* home = std::getenv("HOME");
 #endif
         return home && *home ? fs::path(home) : fs::current_path();
+#endif
     }
 
     ImU32 accent(const std::string& hex) {

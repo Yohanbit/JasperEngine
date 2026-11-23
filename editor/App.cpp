@@ -5956,6 +5956,15 @@ std::filesystem::path editor::App::getUserCacheBaseDir() {
         }
         return std::filesystem::temp_directory_path();
 
+    #elif defined(__ANDROID__)
+        // Android has no HOME and no XDG_CACHE_HOME, so the branch below fell through to
+        // temp_directory_path(): /data/local/tmp, which an app does not own, so the shader cache
+        // (App.cpp's own shaderCacheDir, used on the first frames) could not be created. The
+        // app's private files directory is exported by EditorPaths.java for this.
+        if (const char* config = std::getenv("JASPERENGINE_ANDROID_CONFIG_DIR"); config && *config) {
+            return std::filesystem::path(config).parent_path();
+        }
+        return std::filesystem::temp_directory_path();
     #else
         // Linux / other Unix: XDG Base Dir spec
         // Prefer $XDG_CACHE_HOME, fallback to ~/.cache

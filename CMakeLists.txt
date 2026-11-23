@@ -320,6 +320,12 @@ elseif(API_BACKEND STREQUAL "android")
     # its own backend. find_package(game-activity) is the engine's, included further down.
     list(APPEND BACKEND_SOURCES
         ${EDITOR_DIR}/backend/BackendAndroid.cpp
+        # editor/Platform.cpp calls all nine HostServices functions; the Linux, Windows and Mac
+        # backends each supply them, and Android had none, so the editor's shared library failed
+        # to link on undefined HostServices symbols. This one is the engine's own Android
+        # implementation of them, not the game runtime's (JasperEngineAndroid reaches them through
+        # NativeEngine, the singleton the editor never creates).
+        ${JASPERENGINE_ROOT}/platform/android/HostServicesAndroid.cpp
     )
     list(APPEND BACKEND_LIBS
         android

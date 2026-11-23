@@ -91,32 +91,34 @@ jobs:
           key: gradle-${{ steps.image.outputs.tag }}-${{ hashFiles('engine/workspaces/androidstudio/**/*.gradle', 'engine/workspaces/androidstudio/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ steps.image.outputs.tag }}-
 
-      - name: APK
-        run: tools/ci/logged.sh android-build "tools/build.sh android"
-
-      # -- the editor's APK (com.jaspergameengine.editor): the repository's own CMake tree with
-      # API_BACKEND=android. Deliberately not a tools/build.sh lane: that script's `android` target
-      # is the game sample's and its contract with engine/project must not change.
+      # The editor first, and that order is the point. The game APK is a full NDK build of the
+      # editor's whole object library plus a game project, and it has been the step that fails
+      # (or runs for 40+ minutes) on this branch; when it does, a later step never runs and the
+      # editor's own APK -- the thing this lane exists for -- is never built. The editor's build
+      # is the smaller one (no game project, no cooked assets), so it also warms the ccache for
+      # the game.
       - name: Editor APK
+        continue-on-error: true
         run: |
-          mkdir -p build/android
+          mkdir -p build/android build/test-results
           set +e
           cd engine/workspaces/androidstudio
           ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' editor/build.gradle)
           if [[ -z $ndk ]]; then echo "no ndkVersion in editor/build.gradle"; exit 1; fi
           if [[ ! -f "$ANDROID_HOME/ndk/$ndk/source.properties" ]]; then
-            # (the $ is expanded by the shell retry.sh runs, not here: SC2016)
             # shellcheck disable=SC2016
             /src/tools/ci/retry.sh bash -c "sdkmanager --install 'ndk;$ndk' > /dev/null && test -f '$ANDROID_HOME/ndk/$ndk/source.properties'"
           fi
           # absolute: this step cd's, and a relative redirect would land elsewhere or fail
           log="$GITHUB_WORKSPACE/build/test-results/android-editor.log"
-          mkdir -p "$GITHUB_WORKSPACE/build/test-results" "$GITHUB_WORKSPACE/build/android"
           CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           apk=editor/build/outputs/apk/debug/editor-debug.apk
           if [[ -f $apk ]]; then cp "$apk" "$GITHUB_WORKSPACE/build/android/jasperengine-editor.apk"; fi
           exit $status
+
+      - name: APK
+        run: tools/ci/logged.sh android-build "tools/build.sh android"
 
       # The run's logs and artifacts cannot be read from a session outside this repository's own
       # runner, so the compiler's own errors are surfaced as check-run ANNOTATIONS, which the API
@@ -124,6 +126,10 @@ jobs:
       # a build is fixed by, so ten of them per failing step is what this needs.
       - name: Annotate the build errors
         if: failure()
+        # A step that fails here stops the job, and the artifact uploads below it never run: the
+        # editor's APK was built and then thrown away. Reporting a failure may never be the reason
+        # a deliverable is lost.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           # a pull_request event carries it; a dispatch has to be told which PR is open
@@ -174,11 +180,22 @@ jobs:
           find build/android -name '*.apk' -exec ls -lh {} \; || true
           [[ -f build/test-results/android-build.log ]] && tail -n 60 build/test-results/android-build.log || true
 
+      # The editor's APK on its own, uploaded whatever the game's step did: it is the artifact a
+      # phone-installable editor comes from, and making it depend on the game APK is what kept it
+      # from ever being downloadable (the run was red before this step was reached).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: jasperengine-editor-apk-arm64-v8a
+          path: build/android/jasperengine-editor.apk
+          if-no-files-found: warn
+          retention-days: 30
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: success()
         with:
           name: jasperengine-apk-${{ inputs.abis || 'arm64-v8a' }}
-          path: build/android/*.apk
+          path: build/android/jasperengine-apk*.apk
           # warns rather than failing: the run that stops early has already gone red
           if-no-files-found: warn
           retention-days: 30
