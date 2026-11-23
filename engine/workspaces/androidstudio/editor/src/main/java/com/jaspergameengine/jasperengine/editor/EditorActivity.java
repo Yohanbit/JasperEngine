@@ -51,6 +51,10 @@ public class EditorActivity extends GameActivity {
             throw new RuntimeException("jasperengine-editor did not load: " + libraryLoadError, libraryLoadError);
         }
 
+        // Where the native side keeps settings and projects: only Java can ask Android for it, and
+        // it must be set before the first frame reads a setting
+        EditorPaths.setProcessEnvironment(this);
+
         // An editor session is long and a screen that dims mid-edit loses work in the user's hands
         getWindow().addFlags(LayoutParams.FLAG_KEEP_SCREEN_ON);
 

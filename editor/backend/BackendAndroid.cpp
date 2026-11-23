@@ -139,7 +139,7 @@ namespace jasperengine::editor {
             eglQuerySurface(gDisplay, gSurface, EGL_WIDTH, &gWidth);
             eglQuerySurface(gDisplay, gSurface, EGL_HEIGHT, &gHeight);
 
-            Log::info("[editor] ES3 context up, %dx%d, %s / %s", gWidth, gHeight,
+            Log::print("[editor] ES3 context up, %dx%d, %s / %s", gWidth, gHeight,
                       reinterpret_cast<const char*>(glGetString(GL_VERSION)),
                       reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
             gContextUp = true;
@@ -423,14 +423,21 @@ namespace jasperengine::editor {
             (void)gPointerDown;
         }
 
-        // GameActivity's soft keyboard hands the whole text of the focused field, in Java's
-        // modified UTF-8 (the engine decodes the same format for its own InputField, so the
-        // conversion is the tested one and not a second copy of it).
-        void textInputCallback(void*, const GameTextInputState* state){
-            if (!state || !state->text_UTF8)
+        // GameActivity's soft keyboard keeps the field's state on the Java side; the app reads it
+        // with GameActivity_getTextInputState, which calls back synchronously on this thread. The
+        // text is Java's modified UTF-8, decoded by the engine's own tested converter (the one its
+        // InputField uses) rather than a second copy of the format.
+        void drainTextInputState(android_app* app){
+            if (!app || !app->activity || !app->textInputState)
                 return;
-            Backend::queueText(jasperengine::android::decodeModifiedUtf8(state->text_UTF8,
-                                                                        state->text_length));
+            GameActivity_getTextInputState(app->activity, [](void* context, const GameTextInputState* state){
+                if (!context || !state)
+                    return;
+                Backend::queueText(jasperengine::android::decodeModifiedUtf8(state->text_UTF8,
+                                                                            state->text_length));
+                // the state was taken: GameActivity does not hand it over twice
+                static_cast<android_app*>(context)->textInputState = false;
+            }, app);
         }
 
         void onAppCmd(android_app* app, int32_t cmd){
@@ -486,8 +493,6 @@ namespace jasperengine::editor {
         gAndroidApp = app;
         app->userData = nullptr;
         app->onAppCmd = &onAppCmd;
-
-        GameActivity_setTextInputStateCallback(app->activity, app, &textInputCallback);
 
         // The window exists by the time android_main runs, but the first APP_CMD_INIT_WINDOW
         // may still be ahead of us: wait for it rather than drawing into no surface.
@@ -579,9 +584,11 @@ namespace jasperengine::editor {
         if (engineStarted && !gShouldClose)
             app.loadStartupProject();
 
-        Log::info("[editor] entering the frame loop");
+        Log::print("[editor] entering the frame loop");
 
         while (!gShouldClose){
+            drainTextInputState(gAndroidApp);
+
             android_input_buffer* inputBuffer = android_app_swap_input_buffers(gAndroidApp);
             if (inputBuffer){
                 if (inputBuffer->keyEventsCount)
@@ -613,7 +620,7 @@ namespace jasperengine::editor {
                 gShouldClose = true;
         }
 
-        Log::info("[editor] leaving the frame loop");
+        Log::print("[editor] leaving the frame loop");
         app.shutdownBackgroundWork();
         app.saveWindowSettings(gWidth, gHeight, false, ANDROID_UI_SCALE);
 

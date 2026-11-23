@@ -4,7 +4,8 @@ apply plugin: 'com.android.application'
 // sync and no player. The native side is the editor's own CMake tree (the repository root's
 // CMakeLists.txt with API_BACKEND=android), which builds libjasperengine-editor.so from
 // editor/backend/BackendAndroid.cpp and the engine as a shared library beside it.
-def jasperengineRoot = "../.."
+// From this module's directory: androidstudio/editor -> androidstudio -> workspaces -> engine -> root
+def jasperengineRoot = "../../../.."
 def jasperengineRootAbs = file(jasperengineRoot).toString()
 
 android {
