@@ -9,6 +9,7 @@
 #include "hub/ProjectImporter.h"
 
 #include "hub/HubPaths.h"
+#include "System.h"
 #include "hub/StagingFolders.h"
 #include "vcs/ProcessExec.h"
 
@@ -202,6 +203,30 @@ bool importer::importZip(const fs::path& zip, const fs::path& parent, const ZipL
         return false;
     }
     hub::staging::sweep({{parent}, {}});
+
+    // Ask about space before extracting, not after the volume fills: extraction writes the whole
+    // archive's contents, and running out halfway leaves a staging folder the user has to find and
+    // a project that is half there. The reading is the platform's (System::getVolumeSpace, statfs on
+    // Android); an unknown reading is never a refusal, so a desktop is unaffected. The reserve the
+    // save path keeps is too small here -- extraction triples the archive while both copies exist --
+    // so the estimate is the archive's own size doubled, which is generous and cheap to compute.
+    {
+        std::error_code sizeEc;
+        const auto archiveBytes = fs::file_size(zip, sizeEc);
+        // hasInstance, not instance(): this runs on the import's own thread, and a headless importer
+        // (an MCP call, a test) may have no System at all. Without one there is nothing to ask, and
+        // the extraction proceeds exactly as it did before.
+        if (!sizeEc && System::hasInstance()) {
+            const uint64_t needed = static_cast<uint64_t>(archiveBytes) * 2u;
+            if (!System::instance().getVolumeSpace().allowsWrite(needed)) {
+                error = "not enough free space to import " + zip.filename().string() + ": the archive is " +
+                        std::to_string(static_cast<unsigned long long>(archiveBytes / (1024u * 1024u))) +
+                        " MB and unpacking it needs about twice that";
+                return false;
+            }
+        }
+    }
+
     const std::string stem = zip.stem().string();
     hub::staging::Claim claim(parent, stem.empty() ? "Project" : stem);
     if (!claim.ok()) {

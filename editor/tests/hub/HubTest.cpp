@@ -9,6 +9,7 @@
 #include "hub/RecentProjects.h"
 #include "hub/StagingFolders.h"
 #include "hub/TemplateCatalog.h"
+#include "System.h"
 #include "io/AtomicFile.h"
 
 #include "support/TestTempDir.h"
@@ -241,6 +242,78 @@ TEST(ZipImport, AWriteThatFailsAtTheLastFlushFailsTheImport) {
     EXPECT_TRUE(emptyFolder(parent));
 }
 #endif
+
+// The free-space check the import runs before it extracts anything: a volume too small for the
+// archive's contents refuses up front, and leaves no staging folder and no half-imported project.
+// This is the Android case the check exists for (a phone's internal storage is small and shared),
+// reached here by handing the importer a volume reading instead of a full disk.
+namespace jasperengine {
+    // System.h's test-only seam (a friend, so this is the only way in)
+    struct SystemTestAccess {
+        static System* swap(System* system) {
+            System* previous = System::systemInstance;
+            System::systemInstance = system;
+            return previous;
+        }
+    };
+}
+
+namespace {
+    class FixedSpaceSystem : public System {
+    public:
+        VolumeSpace reading;
+        VolumeSpace getVolumeSpace() override { return reading; }
+        int getScreenWidth() override { return 1080; }
+        int getScreenHeight() override { return 2400; }
+    };
+}
+
+TEST(ZipImport, AVolumeTooSmallForTheArchiveRefusesBeforeExtracting) {
+    TestTempDir dir("zip-nospace");
+    const fs::path parent = dir.path() / "Projects";
+    fs::create_directories(parent);
+    const fs::path zip = dir.path() / "Game.zip";
+    // 4 KiB of content, so the estimate the check makes is 8 KiB
+    writeZip(zip, {{"Game/project.yaml", std::string(4096, 'a')}});
+
+    FixedSpaceSystem system;
+    system.reading.known = true;
+    system.reading.availableBytes = 16u * 1024u;          // 16 KiB: under the 8 MiB reserve
+    system.reading.totalBytes = 32ull * 1024 * 1024 * 1024;
+    System* previous = SystemTestAccess::swap(&system);
+
+    fs::path projectDir;
+    std::string error;
+    const bool imported = importer::importZip(zip, parent, ZipLimits(), nullptr, projectDir, error);
+    SystemTestAccess::swap(previous);
+
+    EXPECT_FALSE(imported) << "imported to " << projectDir;
+    EXPECT_NE(error.find("free space"), std::string::npos) << error;
+    // the refusal is before the staging folder: nothing was created, not even emptied
+    EXPECT_TRUE(emptyFolder(parent));
+}
+
+TEST(ZipImport, AVolumeWithRoomImportsNormally) {
+    TestTempDir dir("zip-hasspace");
+    const fs::path parent = dir.path() / "Projects";
+    fs::create_directories(parent);
+    const fs::path zip = dir.path() / "Game.zip";
+    writeZip(zip, {{"Game/project.yaml", std::string(1024, 'a')}});
+
+    FixedSpaceSystem system;
+    system.reading.known = true;
+    system.reading.availableBytes = 4ull * 1024 * 1024 * 1024;
+    system.reading.totalBytes = 64ull * 1024 * 1024 * 1024;
+    System* previous = SystemTestAccess::swap(&system);
+
+    fs::path projectDir;
+    std::string error;
+    const bool imported = importer::importZip(zip, parent, ZipLimits(), nullptr, projectDir, error);
+    SystemTestAccess::swap(previous);
+
+    EXPECT_TRUE(imported) << error;
+    EXPECT_TRUE(fs::exists(parent / "Game" / "project.yaml"));
+}
 
 TEST(ZipImport, RefusedArchivesLeaveNothing) {
     TestTempDir dir("zip-refused");
