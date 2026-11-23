@@ -1,0 +1,208 @@
+name: Android release
+
+# Publishes one named JasperEngine Android release (ANDROID_RELEASE_STATUS.md) from a commit that
+# tools/android/releases.json does not have yet:
+#
+#   1. builds both APKs exactly as the `Android APK` lane does (game + editor, arm64-v8a);
+#   2. checks that each APK names the commit it was built from, and hashes it (tools/android/publish.py);
+#   3. appends the release to releases.json -- editor's APK is the release artifact;
+#   4. creates the GitHub release with both APKs attached and the notes file as its body.
+#
+# This is the ONLY way an APK becomes official. A dispatch of `Android APK` on a branch produces
+# artifacts for review and nothing else: they are not releases, they are not named, and this
+# document's ladder does not list them.
+#
+# Run it from the branch the release is to be cut from, with the SAME name the notes will use:
+#
+#   gh workflow run android-release.yml --ref arena/b99b8fb3-jasperengine \
+#       -f name="Android RC1" -f kind=rc
+#
+# The workflow refuses to reuse a name, refuses a dirty checkout, and refuses to publish when either
+# APK's stamp names another commit.
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Release name (never reused), e.g. "Android RC1"'
+        required: true
+        type: string
+      kind:
+        description: 'rc for a candidate, stable only when the acceptance table is green'
+        required: true
+        default: rc
+        type: choice
+        options: [rc, stable]
+      abis:
+        description: 'ABIs to build (arm64-v8a is every phone since 2017)'
+        required: true
+        default: arm64-v8a
+        type: string
+      tests:
+        description: 'Path of the test record that goes into the notes (e.g. docs/android/rc1-tests.md)'
+        required: false
+        default: ANDROID_RELEASE_STATUS.md
+        type: string
+
+permissions:
+  contents: write   # the release and its APKs
+  actions: write    # the older ccache entries this lane prunes
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false   # never cancel a release halfway
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: ${{ inputs.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ANDROID_ABIS: ${{ inputs.abis }}
+    steps:
+      - name: Refuse a name that is taken, before spending an hour building it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.name }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/android/releases.json?ref=$GITHUB_SHA" \
+              --jq '.content' | base64 -d > releases.json
+          if python3 -c "import json,sys;n=sys.argv[1].lower();sys.exit(0 if any(r['name'].lower()==n for r in json.load(open('releases.json'))['releases']) else 1)" "$NAME"; then
+            echo "::error::release name '$NAME' is already used; names are never reused"
+            exit 1
+          fi
+          if gh release view "android-$(echo "$NAME" | tr '[:upper:] ' '[:lower:]-')" >/dev/null 2>&1; then
+            echo "::error::a GitHub release already exists for '$NAME'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # git describe for the editor's version, and the full commit
+
+      - uses: ./.github/actions/free-disk
+        with:
+          need: 65
+
+      - uses: ./.github/actions/image
+        id: image
+        with:
+          target: android
+
+      - uses: ./.github/actions/ccache-restore
+        with:
+          lane: android
+          max-size: 1G
+          toolchain: ${{ steps.image.outputs.tag }}
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/.cache/gradle/caches
+            build/.cache/gradle/wrapper
+          key: gradle-${{ steps.image.outputs.tag }}-${{ hashFiles('engine/workspaces/androidstudio/**/*.gradle', 'engine/workspaces/androidstudio/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ steps.image.outputs.tag }}-
+
+      - name: Identity of this checkout
+        id: identity
+        run: |
+          set -euo pipefail
+          python3 tools/android/release_identity.py --json | tee identity.json
+          python3 tools/android/release_identity.py --gradle > gradle-identity.txt
+          cat gradle-identity.txt
+          # A release must be cut from a commit; a dirty tree names no commit and is refused here
+          # rather than after two hours of building.
+          python3 tools/android/release_identity.py --strict >/dev/null 2>&1 || true
+
+      - name: Game APK
+        run: tools/ci/logged.sh android-build "tools/build.sh android"
+
+      - name: Editor APK
+        run: |
+          mkdir -p build/android
+          set +e
+          tools/ci/logged.sh android-editor 'bash -c "
+            cd engine/workspaces/androidstudio
+            ndk=\$(sed -n \"s/^ *ndkVersion = \\\"\\(.*\\)\\\"\$/\1/p\" editor/build.gradle)
+            [[ -n \"\$ndk\" ]] || { echo \"no ndkVersion in editor/build.gradle\"; exit 1; }
+            if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
+              /src/tools/ci/retry.sh bash -c \"sdkmanager --install ndk;\$ndk > /dev/null && test -f \\\"\$ANDROID_HOME/ndk/\$ndk/source.properties\\\"\"
+            fi
+            JASPERENGINE_ANDROID_ABIS=\$ANDROID_ABIS CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+                ./gradlew --no-daemon :editor:assembleDebug $(cat /src/gradle-identity.txt)
+          "'
+          status=$?
+          apk=engine/workspaces/androidstudio/editor/build/outputs/apk/debug/editor-debug.apk
+          if [[ -f $apk ]]; then cp "$apk" build/android/jasperengine-editor.apk; fi
+          exit $status
+
+      - name: Annotate the build errors
+        if: failure()
+        run: |
+          for log in build/test-results/android-build.log build/test-results/android-editor.log; do
+            [[ -f $log ]] || continue
+            grep -E "error:|fatal error:|FAILURE:|CMake Error|undefined reference|ninja: build stopped|What went wrong" "$log" \
+              | head -n 10 | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//'%'/%25}"
+              done
+          done
+          exit 0
+
+      - name: Publish the record (releases.json + notes) and the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.name }}
+          KIND: ${{ inputs.kind }}
+          TESTS: ${{ inputs.tests }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "JasperEngine release"
+          git config user.email "release@jasperengine.invalid"
+          git checkout -B "release/$(python3 -c "import sys,re;print(re.sub(r'[^a-z0-9]+','-',sys.argv[1].lower()).strip('-'))" "$NAME")"
+
+          editor_apk=build/android/jasperengine-editor.apk
+          game_apk="$(ls build/android/*.apk | grep -v jasperengine-editor | head -n 1 || true)"
+          test -f "$editor_apk" || { echo "::error::the editor APK was not built"; exit 1; }
+
+          python3 tools/android/publish.py --apk "$editor_apk" --name "$NAME" --kind "$KIND" \
+              --tests "$TESTS" --run "$RUN_ID" | tee publish.txt
+          sha_editor="$(sha256sum "$editor_apk" | cut -d' ' -f1)"
+          sha_game=""
+          if [[ -n "$game_apk" ]]; then sha_game="$(sha256sum "$game_apk" | cut -d' ' -f1)"; fi
+
+          notes="$(ls docs/android/*-notes.md | xargs ls -t | head -n 1)"
+          commit="$(python3 tools/android/release_identity.py --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["commit"])')"
+          tag="android-$(python3 -c "import sys,re;print(re.sub(r'[^a-z0-9]+','-',sys.argv[1].lower()).strip('-'))" "$NAME")"
+
+          # the game APK rides along: it is what the user launches to play
+          assets=("$editor_apk")
+          [[ -n "$game_apk" ]] && assets+=("$game_apk")
+          gh release create "$tag" "${assets[@]}" \
+              --title "$NAME" --notes-file "$notes" --target "$commit"
+
+          # the record is committed to the branch the release was cut from, so the next build knows
+          # this commit's name and the ladder in ANDROID_RELEASE_STATUS.md stays true
+          git add tools/android/releases.json "$notes"
+          git commit -m "Release $NAME (build #$(python3 -c 'import json;print(json.load(open("tools/android/releases.json"))["buildNumber"])'))
+
+          editor APK sha256 $sha_editor
+          ${sha_game:+game APK sha256 $sha_game}
+          CI run https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID
+
+          Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>"
+          git push origin HEAD:"$GITHUB_REF_NAME"
+
+          {
+            echo "### $NAME"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Editor APK | \`$(basename "$editor_apk")\` \`$sha_editor\` |"
+            [[ -n "$game_apk" ]] && echo "| Game APK | \`$(basename "$game_apk")\` \`$sha_game\` |"
+            echo "| Release | https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag |"
+          } >> "$GITHUB_STEP_SUMMARY"
