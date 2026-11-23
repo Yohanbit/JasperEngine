@@ -858,8 +858,11 @@ android)
         mkdir -p "/src/$APK_DIR" || { echo "android: cannot make /src/$APK_DIR" >&2; exit 6; }
         echo 'android: running gradlew'
         env $PROJECT_ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon assembleDebug "\${IDENTITY_ARGS[@]}" 2>&1 | tee "/src/$APK_DIR/gradle.log"
-        gradle_status=${PIPESTATUS[0]}
-        [[ $gradle_status -eq 0 ]] || { echo "android: gradlew exited $gradle_status" >&2; exit "$gradle_status"; }
+        # \$: this string is expanded by the OUTER shell first, and an unescaped \$gradle_status here
+        # aborted the outer script with "unbound variable" under set -u -- before docker was even
+        # called. It read, from outside, exactly like a block that succeeded without doing anything.
+        gradle_status=\${PIPESTATUS[0]}
+        [[ \$gradle_status -eq 0 ]] || { echo "android: gradlew exited \$gradle_status" >&2; exit "\$gradle_status"; }
         # the globs are not compgen here (this is a real shell with real files): a failed one must
         # say so, and not be handed to cp as a literal name
         ls /src/$APK_DIR/gradle.log
