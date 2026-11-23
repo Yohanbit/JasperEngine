@@ -134,35 +134,42 @@ jobs:
           exit $status
 
       # uploads whatever the exit status was: a half-finished build must not take the artifact with it
-      # A run's own logs cannot be downloaded from outside the runner (the artifact host is not
-      # reachable from the session that reads them), and a session that cannot read the log is
-      # working blind. So the log is made readable where the API does serve it: as a check-run
-      # annotation. Annotations have a 64 KB budget per step and ~64 KB per message, so the tail
-      # is split into chunks: the tail is where a build's verdict is.
-      - name: Publish the build log where it can be read
+      # Reading a run's logs from outside the runner is not possible: GitHub serves them only once
+      # the job is complete, and the host it serves them from
+      # (results-receiver.actions.githubusercontent.com) is not reachable from the session that
+      # reads them. Check-run ANNOTATIONS are served by the API while the job still runs, so they
+      # are the channel: the compiler's own message lines and the tail of each log, chunked to fit
+      # the ~64 KB an annotation carries. This is what made the twelve missing GL symbols visible
+      # in one call instead of three guesses.
+      - name: Publish the build log as annotations
         if: always()
         continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          for log in build/test-results/android-editor.log build/android/gradle.log; do
-            [[ -f $log ]] || continue
-            # the compiler's own message lines, then the tail: a 1 MB log cannot be sent whole
+          # ONE annotation per log, just under the ~64 KB an annotation body carries. An earlier
+          # version split each log into 5.5 KB chunks, and the API keeps the first chunks of a
+          # step and drops the rest -- so the digest that arrived was the head (80 warnings) and
+          # the tail, where the verdict and the errors are, never made it. The last 60000 bytes
+          # are the build's end; a log's first lines are the least useful part of it.
+          publish() {
+            local log="$1" name="$2"
+            [[ -f $log ]] || return 0
+            local total; total=$(wc -c <"$log")
+            # the compiler's own errors first (they may be anywhere), then the tail
             {
-              grep -aE "error:|warning:|CMake Error|undefined symbol|FAILED|BUILD (SUCCESSFUL|FAILED)|ninja: build stopped" "$log" | head -n 120
-              echo "--- tail ---"
-              tail -c 40000 "$log"
-            } > /tmp/logdigest.txt
-            total=$(wc -c </tmp/logdigest.txt)
-            # 6 chunks of ~6.5 KB: comfortably inside the per-message limit, and enough to see a
-            # build's start of failure and its end
-            split -b 6500 -a 2 /tmp/logdigest.txt /tmp/chunk_
-            echo "::error title=$log ($total bytes)::digest in the annotations of this step"
-            for f in /tmp/chunk_*; do
-              printf "::error title=%s part %s::%s\n" "$log" "${f##*_}" "$(sed -n '1,200p' "$f" | sed 's/%/%25/g; s/\r/\\r/g' | tr -d '\000-\010\013\014\016-\037')"
-            done
-          done
+              grep -aE "error:|CMake Error|undefined symbol|ninja: build stopped|^> Task .* FAILED" "$log" | head -n 40
+              echo "=== last bytes of $name ($total in all) ==="
+              tail -c 56000 "$log"
+            } >/tmp/digest.txt
+            local body; body=$(tr -d '\000-\010\013\014\016-\037' </tmp/digest.txt | sed 's/%/%25/g')
+            local sent; sent=$(wc -c </tmp/digest.txt)
+            echo "::error title=${name} (${total} bytes, digest ${sent})::${body}"
+            echo "::notice title=${name}::digest published as one annotation (${sent} of ${total} bytes)"
+            return 0
+          }
+          publish build/test-results/android-editor.log android-editor.log
+          publish build/android/gradle.log gradle.log
+          publish build/test-results/android-build.log android-build.log
           exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -305,6 +312,38 @@ jobs:
         run: |
           find build/android -name '*.apk' -exec ls -lh {} \; || true
           [[ -f build/test-results/android-build.log ]] && tail -n 60 build/test-results/android-build.log || true
+
+      - name: Publish the build log as annotations
+        if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          shopt -s nullglob
+          logs=(build/test-results/android-editor.log build/android/gradle.log build/test-results/android-build.log)
+          found=0
+          for log in "${logs[@]}"; do
+            [[ -f $log ]] || continue
+            found=1
+            name=$(basename "$log")
+            # the compiler's own message lines first (they are the diagnosis), then the tail
+            {
+              grep -aE "error:|warning:|CMake Error|undefined symbol|FAILED|BUILD (SUCCESSFUL|FAILED)|ninja: build stopped|^> Task .* FAILED" "$log" | head -n 80
+              echo "=== tail of $name ==="
+              tail -c 30000 "$log"
+            } > "/tmp/digest-$name.txt"
+            total=$(wc -c <"/tmp/digest-$name.txt")
+            # split to ~5.5 KB so a chunk is a single safe annotation body
+            split -b 5500 -a 2 "/tmp/digest-$name.txt" "/tmp/chunk-$name-"
+            i=0
+            for f in /tmp/chunk-"$name"-*; do
+              body=$(tr -d '\000-\010\013\014\016-\037' <"$f" | sed 's/%/%25/g')
+              echo "::error title=${name} part ${i} (${total} bytes total)::${body}"
+              i=$((i+1))
+            done
+            echo "::notice title=${name}::published $total bytes of digest in $i annotations"
+          done
+          [[ $found == 0 ]] && echo "::warning title=no build log::none of ${logs[*]} exists"
+          exit 0
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: success()
