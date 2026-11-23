@@ -28,7 +28,7 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 Total: **80 cases, 80 pass, 0 skipped, 0 disabled.**
 
-Plus `tools/android/selfcheck.cpp`: seven property checks across the eight headers, run with one
+Plus `tools/android/selfcheck.cpp`: seven property checks across the nine headers, run with one
 compiler invocation and no build system. Verified by mutation (reintroducing bug 10j and the
 `isInsideProject` bug makes it fail), and its own first version did not catch 10j -- recorded in the
 file's header, because a gate that has never failed is a decoration.

@@ -70,11 +70,14 @@ headers added here follow it exactly, which also means:
 
 ## 3. Implemented (this branch)
 
-All nine (eight headers) are free of Android headers, no new build wiring, C++20,
+All nine headers (`AndroidAssetImport`, `AndroidImageLimits`, `AndroidImageOrientation`,
+`AndroidImportPreflight`, `AndroidImportTransfer`, `AndroidModelSidecars`, `AndroidProjectLayout`,
+`AndroidStorageSpace`, `AndroidTouchGestures`) are free of Android headers, no new build wiring, C++20,
 `-Wall -Wextra -Werror` clean on GCC 12, and **80 gtest cases passing**, plus `tools/android/selfcheck.cpp` (seven invariants, no CMake needed). A runnable tool exposes the
-whole thing: `tools/android-asset-report.py <project>`. Every header is included
-twice by the suite on purpose (see bug 10d). See `ANDROID_TEST_MATRIX.md` for the evidence of every
-case and the red control.
+whole thing: `tools/android-asset-report.py <project>`. `AndroidImageOrientation.h` is included
+twice by the suite on purpose (see bug 10d); `tools/android/verify.py` compiles each of the nine
+alone and twice, which is the check that generalises it. See `ANDROID_TEST_MATRIX.md` for the evidence
+of every case and the red control.
 
 | File | What it provides | State |
 | --- | --- | --- |

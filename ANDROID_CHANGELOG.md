@@ -122,7 +122,7 @@ with no device to run it on.
 - `tools/android/integration/{gestures,import,space}-demo.cpp`: the code that document gives,
   compiled and run against the real headers, so the quoted output is a run and not a sketch.
 - `tools/android/verify.py`: from a bare checkout with a C++20 compiler and nothing else — the suite,
-  the selfcheck, every header twice under `-Werror`, the three demos, the 400k-input fuzz run, and
+  the selfcheck, every header twice under `-Werror`, the four demos, the 400k-input fuzz run, and
   then the two `Data` defects, reported without failing the run because `Data.cpp` is not ours.
 - `tools/android/data-overflow-real.py`: the same defects, but with `seek` and `read` **lifted out of
   the real `Data.cpp`** instead of retyped, so the ASan trace is about the shipped file. It exits 1

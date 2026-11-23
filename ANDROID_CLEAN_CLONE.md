@@ -21,10 +21,10 @@ googletest the suite links against is vendored under `libs/googletest`, and no s
 
 | Step | Proves | Time |
 |---|---|---|
-| the gtest suite, `engine/tests/core/platform/AndroidSubsystemsTest.cpp` | the 80 cases over the eight headers | ~15 s |
+| the gtest suite, `engine/tests/core/platform/AndroidSubsystemsTest.cpp` | the 80 cases over the nine headers | ~15 s |
 | `tools/android/selfcheck.cpp` | seven invariants, no framework | ~2 s |
 | every header compiled alone **and twice**, `-Werror` | a missing include guard or a missing include is caught (a single include hides both) | ~10 s |
-| `tools/android/integration/*.cpp` | the code `ANDROID_INTEGRATIONS.md` gives compiles and behaves as documented | ~5 s |
+| `tools/android/integration/*.cpp` | the code `ANDROID_INTEGRATIONS.md` gives compiles and behaves as documented | ~8 s |
 | the fuzz harness, ASan+UBSan | 400,000 hostile inputs through every parser: no out-of-bounds read, no impossible size | ~70 s |
 | `tools/android/data-overflow-real.py` | the two `Data.cpp` defects, from the file's own bodies | ~3 s |
 
@@ -57,7 +57,7 @@ verify: /usr/bin/g++, from /tmp/clean/repo
   PASS AndroidStorageSpace.h
   PASS AndroidTouchGestures.h
 
-=== the three integration demos (tools/android/integration/) -- the code the doc gives
+=== the four integration demos (tools/android/integration/) -- the code the doc gives
   PASS tap 2: tapped=1 doubleTapped=1 interval=200 ms
   PASS out of space: outcome=OutOfSpace "not enough space to finish the copy: free some space and try again, 3 MB are already there"
   PASS   folder assets     cache=0

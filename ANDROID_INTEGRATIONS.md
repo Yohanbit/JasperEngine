@@ -1,6 +1,6 @@
 # The five integrations
 
-`engine/platform/android/` holds eight headers of pure logic (no Android headers, no JNI, no file
+`engine/platform/android/` holds nine headers of pure logic (no Android headers, no JNI, no file
 system calls: they take what the platform knows and answer) with 80 gtest cases and a seven-invariant
 selfcheck. **They are not connected to the engine.** This document is the connection: for each of the
 five pieces of behaviour a phone editor needs, the file that has to call it, the exact function and
@@ -8,7 +8,7 @@ line, the call, its dependencies, what the user then sees, and the code.
 
 Read the status honestly first: nothing on this branch makes any of this work on a phone yet. The
 headers compile, their tests pass, and the code below compiles and runs against them — but no engine
-file includes them, so today a phone build behaves exactly as it did before this branch. The three
+file includes them, so today a phone build behaves exactly as it did before this branch. The four
 demos under `tools/android/integration/` are the code from this document, built and run by
 `tools/android/verify.py`.
 
@@ -111,7 +111,7 @@ JasperPlatform.onActivityResult(this, requestCode, resultCode, data);
 | | |
 |---|---|
 | File | `engine/platform/android/NativeEngine.cpp` |
-| Add | the `nativePicked` native method, registered in `NativeEngine::setupPlatformJNI` |
+| Add | the `nativePicked` native method, next to `onBackPressedNative` (`MainActivity.java:44`) |
 | Called from | Java, on the UI thread; it only copies strings and posts the work |
 | Depends on | `AndroidImportPreflight.h`, `AndroidImportTransfer.h`, a `ContentResolver` open in Java (`openInputStream`) |
 
@@ -241,13 +241,17 @@ end of a session, not an edge case.
 | File | `engine/platform/android/NativeEngine.cpp` (the reading), and the save path that asks |
 | Add | `querySpace()`, and the `allowWrite` check before the atomic write starts |
 | Called from | before `AtomicFileWriter::open`, and before each import chunk |
-| Depends on | `AndroidStorageSpace.h`; `StatFs` in Java, or `statvfs` on the folder's path (no JNI hop: the app's own folders are real paths) |
+| Depends on | `AndroidStorageSpace.h`; `statvfs` from `<sys/statvfs.h>` on the folder's path (no JNI hop: the app's own folders are real paths), and `StatFs` in Java only for a picked folder |
 
-`statvfs` is the cheaper half and needs no Java at all — an app always owns its private folder:
+`statvfs` needs no Java at all, and an app always owns its private folder. (Android's own
+free-space API is `StatFs`, which is not `statvfs` — the difference is in `AndroidStorageSpace.h`'s
+own header comment; bionic has had `statvfs` since long before this engine's `minSdkVersion 21`, and it
+reads the same volume, which is why the first reading below uses it.)
 
 ```cpp
 // NativeEngine.cpp: the volume that holds a folder, read without a JNI hop
 #include <sys/statvfs.h>
+#include <string>                       // AndroidStorageSpace.h needs neither; this function does
 
 static android::SpaceInfo querySpace(const std::string& folder) {
     struct statvfs stats;
@@ -290,6 +294,18 @@ unknown reading, 4 GB write: allowed=1 unknown=1
 The 1 MB save is refused because the policy keeps 8 MiB free past every write: a phone left with 0
 bytes free does not boot its launcher, so "the save succeeded" is not the only thing at stake. An
 unknown reading never refuses, which is the rule that keeps a platform without the call working.
+
+`querySpace` itself is `tools/android/integration/space-query-demo.cpp`, run by `verify.py` on the
+build host's own volume (`statvfs` is `statvfs` there too):
+
+```
+known=1 total=20.3 GB available=15.6 GB reserved=272.0 MB
+a 1 MB save: allowed=1 low=0 critical=0
+missing folder: known=0, and a 999 GB write is allowed=1
+```
+
+The third line is the rule: a folder `statvfs` cannot read becomes `unknownSpace()`, and the policy
+then allows the write rather than inventing a refusal.
 
 ---
 
@@ -488,8 +504,10 @@ both branches, including the resumed copy that is already longer than its source
 1. A device or emulator. This sandbox has no `javac`, no Android SDK, no NDK and no emulator, so no
    APK can be built here and none of the Java above has been compiled — it is written against the
    APIs `MainActivity` already uses, but it is unverified.
-2. `JNIEnv` plumbing for `nativePicked` (`RegisterNatives` or a `Java_com_jaspergameengine_...` name,
-   in `NativeEngine::setupJNI`), which is the main agent's file.
+2. `JNIEnv` plumbing for `nativePicked`. Two shapes already exist in the tree and either works: a
+   `Java_com_jaspergameengine_...` symbol (what `MainActivity.onBackPressedNative` uses) or a
+   `RegisterNatives` table (`NativePlatformAndroid.cpp:309` for `JasperNative`, and
+   `HttpBackendAndroid.cpp` for `JasperHttp`). It goes in the main agent's file.
 3. The `ContentResolver` prefix read (`readPickedPrefixes`) and the stream read
    (`readFromUriInto`), which are Java calls the main agent has to add next to `JasperPlatform`.
 4. The consumers in §4 — the scene view and the UI panel handler — which are shared with the desktop
