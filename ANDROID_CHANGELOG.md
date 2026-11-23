@@ -72,6 +72,14 @@ with no device to run it on.
   deterministic on ties).
 - Red controls: the test's decimal/MiB arithmetic; advice that changed between runs. 54/54.
 
+### `AndroidTouchGestures.h` v2 + `tools/check_headers.py` (`084b24f3`, `9b9d12d1`)
+
+- `updateLongPress` (Android's 500 ms, once, cancelled by movement) and `updateTap` (tap, double tap,
+  and a long-press press is never a tap): the one-finger gestures a touch UI has no other source for.
+  6 cases, 60 total.
+- `check_headers.py` now covers `engine/platform/` and includes every header **twice** — the class of
+  defect (bug 10d) that no other gate could see.
+
 ## Still not done
 
 - Nothing here has run on a phone, an emulator or an APK: no SDK, no NDK, no `javac`, no Docker in

@@ -24,7 +24,7 @@ change (or with the bug still in it) and failed, which is what proves it tests s
 
 | `AndroidModelSidecars` | same | a .gltf's external files; a GLB/inline/data: URI needs nothing; a malformed .gltf; a URI is not a path | 5 |
 
-Total: **54 cases, 54 pass, 0 skipped, 0 disabled.**
+Total: **60 cases, 60 pass, 0 skipped, 0 disabled.**
 
 `AndroidTextInputTest.cpp` (7 cases, the soft keyboard's text conversions) already existed and is
 not repeated here.
@@ -42,6 +42,12 @@ not repeated here.
 | `AndroidAssetImport.MagicBeatsExtension` | PNG named `photo.txt`; Ogg/GLB/TTF magic; RIFF WAVE vs WEBP | pass (**red**: found the RIFF offset bug) |
 | `AndroidAssetImport.ExtensionDecidesWhenBytesSayNothing` | `.obj`, `.gltf`, `.lua`, `.html`, `.css`, `.json`, `.aseprite`, unknown; folder ≠ extension | pass |
 | `AndroidAssetImport.ImportedAssetNameIsAnAssetName` | `Photo 12:30.PNG` → `photo_12_30.png`; `1234` → `_1234.png`; Ogg stays `.ogg`; `...` → `asset` | pass (**red**: found `.wav` for Ogg) |
+| `AndroidTouchGestures.AFingerHeldStillForHalfASecondIsALongPressOnce` | nothing at 400 ms, fires at 500 ms and only that frame, the lift is not a tap | pass |
+| `AndroidTouchGestures.MovingOrLiftingEarlyIsNotALongPress` | walked 60 px at 200 ms → cancelled; a press lifted at 100 ms is a tap | pass |
+| `AndroidTouchGestures.TwoFingersAreAPinchAndNotALongPress` | a two-finger 1 s hold triggers nothing | pass |
+| `AndroidTouchGestures.TwoQuickTapsInTheSamePlaceAreADoubleTapAndTheNextOneStartsOver` | 200 ms / 10 px apart → double tap on the second, single again on the third | pass |
+| `AndroidTouchGestures.TooSlowOrTooFarIsTwoSingleTaps` | 400 ms apart, and 300 px apart | pass |
+| `AndroidTouchGestures.ADragIsNotATap` | a release 200 px from the start | pass |
 | `AndroidTouchGestures.PinchReadsDistanceAndItsChange` | 200 px, +40 spread, −100 close, midpoint | pass |
 | `AndroidTouchGestures.PinchReadsRotationAndPan` | +π/2 line, pan without pinch, quarter-turn delta | pass |
 | `AndroidTouchGestures.PinchEndsWhenAFingerLeaves` | `ended` for exactly one frame | pass |
@@ -113,6 +119,10 @@ fixtures plus 400,000 random buffers — 1 in 7 behind a PNG magic, 1 in 11 behi
 ok: 400209 inputs, no out-of-bounds read and no impossible size
 ```
 
+The sixth run also drives `updatePinch`/`updateDrag`/`updateLongPress`/`updateTap` over noisy touch
+lists (duplicate pointers, out-of-order phases, up to five fingers) and aborts on a negative held
+time. `ok: 400209 inputs`.
+
 The fifth run also parses JSON-shaped noise (and raw noise) through `gltfSidecars`, aborting if a
 parsed model yields an empty required file name or an unparseable one carries no reason — which is
 how the `{"uri": ""}` defect above was found.
@@ -136,8 +146,8 @@ rather than a counted literal.
 Host build of the same file the CI target globs, GCC 12.2, `-std=c++20 -Wall -Wextra -Werror`:
 
 ```
-[==========] 54 tests from 8 test suites ran. (0 ms total)
-[  PASSED  ] 54 tests.
+[==========] 60 tests from 8 test suites ran. (0 ms total)
+[  PASSED  ] 60 tests.
 ```
 
 The command is in `ANDROID_AGENT2_STATUS.md` §6. In the repository's own target the same file is
