@@ -596,11 +596,17 @@ namespace jasperengine::editor {
 
             android_input_buffer* inputBuffer = android_app_swap_input_buffers(gAndroidApp);
             if (inputBuffer){
-                if (inputBuffer->keyEventsCount)
+                // Cleared one kind at a time: native_app_glue has no
+                // android_app_clear_input_buffers, only these two, and this is how the engine's
+                // own NativeEngine does it (NativeEngine.cpp:1575, 1660).
+                if (inputBuffer->keyEventsCount){
                     processKeyEvents(inputBuffer);
-                if (inputBuffer->motionEventsCount)
+                    android_app_clear_key_events(inputBuffer);
+                }
+                if (inputBuffer->motionEventsCount){
                     processMotionEvents(inputBuffer);
-                android_app_clear_input_buffers(gAndroidApp, inputBuffer);
+                    android_app_clear_motion_events(inputBuffer);
+                }
             }
 
             android_poll_source* source = nullptr;
