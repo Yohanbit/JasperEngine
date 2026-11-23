@@ -941,6 +941,17 @@ bool editor::CommandRunner::run(const std::vector<std::string>& argv, const fs::
         int flags = fcntl(pipefd[0], F_GETFL, 0);
         fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
 
+        pid_t pid = 0;   // assigned by the spawn below; the Android branch returns first
+    #if defined(__ANDROID__)
+        // bionic has posix_spawn's types but none of its functions, and an Android app cannot
+        // exec at all: its sandbox has no compiler to run. Every caller of this function is a
+        // desktop feature (external tools, exporters, the title library), and each reports the
+        // failure to the user rather than crashing.
+        close(pipefd[0]);
+        close(pipefd[1]);
+        if (!quiet) Out::error("Android cannot start external processes: %s", argv.empty() ? "" : argv[0].c_str());
+        return false;
+    #else
         posix_spawn_file_actions_t actions;
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_addclose(&actions, pipefd[0]);
@@ -948,7 +959,6 @@ bool editor::CommandRunner::run(const std::vector<std::string>& argv, const fs::
         posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
         posix_spawn_file_actions_addclose(&actions, pipefd[1]);
 
-        pid_t pid = 0;
         const std::string workDirStr = workingDir.string();
         // the program runs in workingDir without a shell: chdir in the child before exec
         if (!workDirStr.empty()) {
@@ -993,6 +1003,7 @@ bool editor::CommandRunner::run(const std::vector<std::string>& argv, const fs::
             if (!quiet) Out::error("Failed to spawn process (POSIX): %s", strerror(spawnResult));
             return false;
         }
+    #endif
 
         {
             std::lock_guard<std::mutex> lock(processPidMutex);
