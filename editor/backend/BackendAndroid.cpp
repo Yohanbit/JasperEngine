@@ -20,6 +20,7 @@
 
 #include "AndroidTextInput.h"
 #include "Engine.h"
+#include "Input.h"
 #include "Log.h"
 #include "TextureRender.h"
 
@@ -909,8 +910,13 @@ namespace jasperengine::editor {
     void Backend::closeWindow(){ gShouldClose = true; }
 
     float Backend::penPressure(){
-        // a finger has no pressure axis ImGui consumes; a stylus would report it here
-        return -1.0f;
+        // The engine's Android input already reads the stylus's pressure axis
+        // (NativeEngine.cpp stylusPressureOf -> Input::setPenPressure) and returns -1 for a finger,
+        // a mouse or a hover, which is exactly this contract: a value below zero means "no pen".
+        // The terrain brush (window/TerrainEditWindow.cpp) paints at the pressure it gets here, so
+        // returning -1 unconditionally made a stylus paint at one fixed strength on a tablet while
+        // pressing harder did nothing.
+        return jasperengine::Input::getPenPressure();
     }
 
     bool Backend::isRunningOnWayland(){ return false; }
