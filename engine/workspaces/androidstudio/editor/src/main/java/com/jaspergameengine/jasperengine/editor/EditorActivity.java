@@ -44,7 +44,10 @@ public class EditorActivity extends GameActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        if (isDebuggable()) EditorBootLog.install(this);
+        if (isDebuggable()) {
+            EditorBootLog.install(this);
+            EditorBootLog.setWindow(getWindow());
+        }
         if (libraryLoadError != null) {
             if (isDebuggable()) EditorBootLog.dump("library load failed: " + libraryLoadError, libraryLoadError);
             throw new RuntimeException("jasperengine-editor did not load: " + libraryLoadError, libraryLoadError);

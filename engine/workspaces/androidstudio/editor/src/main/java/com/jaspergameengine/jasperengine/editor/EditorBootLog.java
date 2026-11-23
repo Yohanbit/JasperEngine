@@ -39,6 +39,9 @@ final class EditorBootLog {
     private static final String FILE_NAME = "editor-boot.txt";
 
     private static Context appContext;
+    /** The activity's window while it is alive, so the report can ask it whether it is immersive. */
+    private static java.lang.ref.WeakReference<android.view.Window> currentWindow =
+            new java.lang.ref.WeakReference<>(null);
     private static Thread.UncaughtExceptionHandler previousHandler;
     private static final StringBuilder events = new StringBuilder();
 
@@ -59,6 +62,11 @@ final class EditorBootLog {
     }
 
     /** One line in the report, so the order of events survives even when logcat is noisy. */
+    /** Called by the activity: the window is what knows whether the bars are hidden. */
+    static void setWindow(android.view.Window window) {
+        currentWindow = new java.lang.ref.WeakReference<>(window);
+    }
+
     static void note(String message) {
         synchronized (events) {
             events.append(new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date()))
@@ -102,6 +110,38 @@ final class EditorBootLog {
               .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
         report.append("abis: ").append(String.join(", ", Build.SUPPORTED_ABIS)).append('\n');
         report.append("package: ").append(appContext.getPackageName()).append('\n');
+        report.append('\n');
+
+        // Whether the window is actually immersive, and at what size it ended up. Both are read
+        // here rather than judged from a screenshot: "the bars are still there" was the report,
+        // and this is the line that says whether the app asked for them to go.
+        report.append("== the window ==\n");
+        final android.view.Window w = currentWindow.get();
+        if (w != null) {
+            final android.view.View decor = w.getDecorView();
+            final android.view.WindowInsets insets =
+                    decor.getRootWindowInsets();
+            report.append("decor: ").append(decor.getWidth()).append('x').append(decor.getHeight())
+                  .append('\n');
+            // WindowInsets.Type arrived in API 30 and this app runs on 24 up, so the older
+            // per-side query is used below that: it answers the same question for these two bars
+            // and keeps the report readable on every supported phone.
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                report.append("status bar visible: ")
+                      .append(insets == null || insets.isVisible(
+                              android.view.WindowInsets.Type.statusBars())).append('\n');
+                report.append("navigation bar visible: ")
+                      .append(insets == null || insets.isVisible(
+                              android.view.WindowInsets.Type.navigationBars())).append('\n');
+            } else if (insets != null) {
+                report.append("status bar inset: ").append(insets.getSystemWindowInsetTop())
+                      .append('\n');
+                report.append("navigation bar inset: ").append(insets.getSystemWindowInsetBottom())
+                      .append('\n');
+            }
+        } else {
+            report.append("decor: (no window)\n");
+        }
         report.append('\n');
 
         report.append("== the editor's directories ==\n");
