@@ -117,6 +117,17 @@ jobs:
           if [[ -f $apk ]]; then cp "$apk" "$GITHUB_WORKSPACE/build/android/jasperengine-editor.apk"; fi
           exit $status
 
+      # The editor's APK on its own, uploaded whatever the game's step did: it is the artifact a
+      # phone-installable editor comes from, and making it depend on the game APK is what kept it
+      # from ever being downloadable (the run was red before this step was reached).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: jasperengine-editor-apk-arm64-v8a
+          path: build/android/jasperengine-editor.apk
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: APK
         run: tools/ci/logged.sh android-build "tools/build.sh android"
 
@@ -179,17 +190,6 @@ jobs:
         run: |
           find build/android -name '*.apk' -exec ls -lh {} \; || true
           [[ -f build/test-results/android-build.log ]] && tail -n 60 build/test-results/android-build.log || true
-
-      # The editor's APK on its own, uploaded whatever the game's step did: it is the artifact a
-      # phone-installable editor comes from, and making it depend on the game APK is what kept it
-      # from ever being downloadable (the run was red before this step was reached).
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: jasperengine-editor-apk-arm64-v8a
-          path: build/android/jasperengine-editor.apk
-          if-no-files-found: warn
-          retention-days: 30
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: success()
