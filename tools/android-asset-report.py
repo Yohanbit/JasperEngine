@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
     options.androidMediaCodec = argc > 3 && std::string(argv[3]) == "1";
     if (argc > 4) options.budget.maxTextureSize = std::atoi(argv[4]);
     if (argc > 5) options.budget.decodedBytesLimit = (uint64_t)std::atoll(argv[5]) << 20;
+    if (argc > 6) options.residentLimitBytes = (uint64_t)std::atoll(argv[6]) << 20;
 
     std::ifstream list(argv[1]);
     std::string line;
@@ -98,8 +99,13 @@ int main(int argc, char** argv) {
         }
         printf("\t%u\n", finding.orientation);
     }
-    printf("#\t%d\t%d\t%llu\t%s\n", report.broken, report.notes,
-           (unsigned long long)report.largestDecodedBytes, report.summary.c_str());
+    printf("#\t%d\t%d\t%llu\t%llu\t%d\t", report.broken, report.notes,
+           (unsigned long long)report.largestDecodedBytes,
+           (unsigned long long)report.residentTextureBytes, report.overResidentBudget ? 1 : 0);
+    for (size_t i = 0; i < report.suggestDownscale.size(); i++) {
+        printf("%s%s", i ? "," : "", report.suggestDownscale[i].c_str());
+    }
+    printf("\t%s\n", report.summary.c_str());
     return report.broken > 0 ? 1 : 0;
 }
 """
@@ -172,6 +178,8 @@ def main(argv):
     parser.add_argument("--max-texture", type=int, default=4096, help="the GPU's longest side")
     parser.add_argument("--decoded-mb", type=int, default=0,
                         help="the bytes one decoded image may take (0: no limit known)")
+    parser.add_argument("--resident-mb", type=int, default=0,
+                        help="the MiB this device has for all textures together (0: not known)")
     parser.add_argument("--json", action="store_true", help="the report as JSON")
     arguments = parser.parse_args(argv)
 
@@ -193,7 +201,7 @@ def main(argv):
                 handle.write(f"{name}\t{truncated_copy(path, limit, workdir, index)}\n")
         command = [binary, listing, "1" if arguments.bitmap_factory else "0",
                    "1" if arguments.media_codec else "0", str(arguments.max_texture),
-                   str(arguments.decoded_mb)]
+                   str(arguments.decoded_mb), str(arguments.resident_mb)]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode not in (0, 1):
             return fail("the report tool failed:\n" + (result.stderr or result.stdout).strip())
@@ -204,7 +212,11 @@ def main(argv):
             fields = line.split("\t")
             if fields[0] == "#":
                 summary = {"broken": int(fields[1]), "notes": int(fields[2]),
-                           "largestDecodedBytes": int(fields[3]), "summary": fields[4]}
+                           "largestDecodedBytes": int(fields[3]),
+                           "residentTextureBytes": int(fields[4]),
+                           "overResidentBudget": fields[5] == "1",
+                           "suggestDownscale": [s for s in fields[6].split(",") if s],
+                           "summary": fields[7]}
                 continue
             if len(fields) < 11:
                 continue
@@ -236,6 +248,10 @@ def main(argv):
                   f"{summary['notes']} to note")
             if summary["largestDecodedBytes"]:
                 print(f"largest single decode: {summary['largestDecodedBytes'] / (1 << 20):.1f} MB")
+            if summary["residentTextureBytes"]:
+                print(f"all textures resident: {summary['residentTextureBytes'] / (1 << 20):.1f} MB")
+            if summary["overResidentBudget"]:
+                print("shrink first: " + ", ".join(summary["suggestDownscale"]))
             if summary["summary"]:
                 print(f"first to fix: {summary['summary']}")
     return 1 if (summary and summary["broken"]) else 0

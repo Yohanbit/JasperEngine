@@ -24,6 +24,7 @@
 #include "AndroidModelSidecars.h"
 #include "asset/AssetType.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -50,6 +51,10 @@ namespace jasperengine::android {
         // below this, one decode's memory is not worth a line in the report: a 100x100 icon
         // announcing "0.0 MB of memory" is noise that hides the 432 MB photo next to it
         uint64_t memoryNoteThreshold = 16ull << 20;
+        // the bytes this device has for textures once the project is loaded: 0 for "not known".
+        // A phone's GPU heap is a fraction of its RAM, and a project that loads on a desktop
+        // fails here rather than at any single file
+        uint64_t residentLimitBytes = 0;
         // the folder the imports land in, for the name collisions: a set of names already taken.
         // nullptr: no folder, every name is free
         const std::vector<std::string>* takenNames = nullptr;
@@ -90,6 +95,18 @@ namespace jasperengine::android {
         std::vector<PreflightFinding> findings;   // in the order the files were given
         // the tallest peak one decode of these files needs, when the platform knows the sizes
         uint64_t largestDecodedBytes = 0;
+        // every texture's decoded size added up: the textures are resident together, so this is
+        // what the GPU heap pays once the project loads, not the peak of the largest one
+        uint64_t residentTextureBytes = 0;
+        // the memory a phone is assumed to have for textures: 0 means "not known, say nothing".
+        // A budget overrun is reported once, for the project, because no single file is at fault
+        uint64_t residentLimitBytes = 0;
+        // true when residentTextureBytes is past residentLimitBytes: the project loads on a desktop
+        // and runs out of memory on the phone it was built for
+        bool overResidentBudget = false;
+        // the images whose size a downscale would bring the project back inside the budget (the
+        // largest first: three of them are usually enough), empty when it is inside already
+        std::vector<std::string> suggestDownscale;
         // the files that will not draw or will not play, whether or not the import is attempted
         int broken = 0;
         int notes = 0;
@@ -283,6 +300,8 @@ namespace jasperengine::android {
     inline PreflightReport preflightImports(const std::vector<PreflightInput>& inputs, const PreflightOptions& options) {
         PreflightReport report;
         report.findings.reserve(inputs.size());
+        report.residentLimitBytes = options.residentLimitBytes;
+        std::vector<std::pair<uint64_t, std::string>> textureSizes;
         for (const PreflightInput& input : inputs) {
             PreflightFinding finding = preflightOne(input, options);
             ImageSize size;
@@ -291,6 +310,13 @@ namespace jasperengine::android {
             size.height = finding.height;
             const uint64_t decoded = size.decodedBytes();
             if (decoded > report.largestDecodedBytes) report.largestDecodedBytes = decoded;
+            if (finding.type == AssetType::Texture && decoded > 0) {
+                // a texture's decoded bytes are what stays resident (the import downscales the
+                // decode, so the encoded file is not the number that matters)
+                const double scale = finding.scale > 0.0 && finding.scale < 1.0 ? finding.scale : 1.0;
+                report.residentTextureBytes += (uint64_t)((double)decoded * scale * scale);
+                textureSizes.push_back({decoded, finding.fileName});
+            }
             if (finding.severity == PreflightSeverity::Broken) {
                 if (report.summary.empty()) {
                     report.summary = finding.fileName + ": " + finding.message;
@@ -300,6 +326,32 @@ namespace jasperengine::android {
                 report.notes++;
             }
             report.findings.push_back(std::move(finding));
+        }
+        if (report.residentLimitBytes > 0 && report.residentTextureBytes > report.residentLimitBytes) {
+            report.overResidentBudget = true;
+            // the files that would bring it back inside, largest first: downscaling one texture is
+            // a decision a user can act on, and three of them usually close a gap of this shape
+            uint64_t over = report.residentTextureBytes - report.residentLimitBytes;
+            // largest first, and by name within a size: std::sort alone leaves equally sized
+            // textures in an order that depends on the input, so the advice would change between
+            // two runs of the same report
+            std::sort(textureSizes.begin(), textureSizes.end(),
+                      [](const auto& left, const auto& right) {
+                          if (left.first != right.first) return left.first > right.first;
+                          return left.second < right.second;
+                      });
+            for (const auto& entry : textureSizes) {
+                if (over == 0) break;
+                report.suggestDownscale.push_back(entry.second);
+                // half of each side is a quarter of the bytes: the cheapest real reduction
+                const uint64_t saved = entry.first - entry.first / 4;
+                over = saved >= over ? 0 : over - saved;
+            }
+        }
+        if (report.summary.empty() && report.overResidentBudget) {
+            report.summary = "the project's textures take " + detail::preflightMegabytes(report.residentTextureBytes) +
+                             ", past the " + detail::preflightMegabytes(report.residentLimitBytes) +
+                             " this device has for them";
         }
         if (report.summary.empty() && report.notes > 0) {
             report.summary = std::to_string(report.notes) + (report.notes == 1 ? " import is" : " imports are") +

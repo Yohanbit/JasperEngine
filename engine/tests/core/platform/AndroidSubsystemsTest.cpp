@@ -1151,3 +1151,45 @@ TEST(AndroidImportPreflight, AGlbIsOneFileAndNothingToSay) {
     EXPECT_TRUE(finding.missingSidecars.empty());
     EXPECT_TRUE(finding.message.empty()) << finding.message;
 }
+
+TEST(AndroidImportPreflight, AFortyTextureProjectIsOutOfMemoryOnAPhoneAndTheReportSaysWhichToShrink) {
+    // 20 atlases of 2048x2048 RGBA: each is 16.8 MB, every one of them "fine" on its own, and
+    // 335 MB together -- which a mid-range phone's GPU heap does not have
+    std::vector<PreflightInput> files;
+    for (int i = 0; i < 20; i++) {
+        PreflightInput file;
+        file.fileName = "ui/atlas_" + std::to_string(i) + ".png";
+        file.prefix = pngHeader(2048, 2048, 6);
+        files.push_back(file);
+    }
+    PreflightOptions options;
+    options.residentLimitBytes = 128ull << 20;
+    const PreflightReport report = preflightImports(files, options);
+
+    EXPECT_EQ(report.broken, 0) << "no single file is at fault";
+    EXPECT_TRUE(report.overResidentBudget);
+    EXPECT_EQ(report.residentTextureBytes, 20ull * 2048ull * 2048ull * 4ull);
+    // 335.5 MB decimal is 320.0 MiB, which is how every tool on the platform reports memory
+    EXPECT_NE(report.summary.find("320.0 MB"), std::string::npos) << report.summary;
+    EXPECT_NE(report.summary.find("128.0 MB"), std::string::npos) << report.summary;
+    EXPECT_NE(report.summary.find("past the"), std::string::npos) << report.summary;
+
+    // and the advice is actionable: shrinking these (largest first) closes the gap
+    EXPECT_FALSE(report.suggestDownscale.empty());
+    EXPECT_EQ(report.suggestDownscale.front(), "ui/atlas_0.png");
+}
+
+TEST(AndroidImportPreflight, AProjectInsideItsBudgetSaysNothingAboutMemory) {
+    std::vector<PreflightInput> files(2);
+    files[0].fileName = "a.png";
+    files[0].prefix = pngHeader(256, 256, 6);
+    files[1].fileName = "b.png";
+    files[1].prefix = pngHeader(256, 256, 6);
+    PreflightOptions options;
+    options.residentLimitBytes = 128ull << 20;
+    const PreflightReport report = preflightImports(files, options);
+    EXPECT_FALSE(report.overResidentBudget);
+    EXPECT_TRUE(report.suggestDownscale.empty());
+    EXPECT_TRUE(report.summary.empty());
+    EXPECT_EQ(report.residentTextureBytes, 2ull * 256ull * 256ull * 4ull);
+}
