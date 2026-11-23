@@ -2131,18 +2131,26 @@ void Engine::systemInit(int argc, char* argv[], System* system, bool startProjec
 }
 
 void Engine::systemStartProject(){
+    // Each stage is logged with the milliseconds since the start: an exported game on a phone
+    // reported nothing between "Graphics:" and the 20 s mark and stayed on the splash, and only
+    // the stage times say which one blocked (docs/testing.md; the same on every platform).
+    const double startMs = stm_ms(stm_since(startupTime));
     #ifndef NO_LUA_INIT
     LuaBinding::init();
+    Log::print("[start] lua: %.0f ms", stm_ms(stm_since(startupTime)) - startMs);
     // native plugins' init hooks (Apple +jasperInit) before any script can call them
     NativeBridge::initPlugins();
+    Log::print("[start] native plugins: %.0f ms", stm_ms(stm_since(startupTime)) - startMs);
     #endif
     #ifndef NO_CPP_INIT
     getOnInit().call();
+    Log::print("[start] the project's init(): %.0f ms", stm_ms(stm_since(startupTime)) - startMs);
     #endif
 
     // after the game's init, which sets the project's threading settings first; anything
     // that ran jobs earlier started them with the defaults
     startJobs();
+    Log::print("[start] jobs: %.0f ms (systemStartProject done)", stm_ms(stm_since(startupTime)) - startMs);
 }
 
 void Engine::setShaderCreationSettings(const ShaderCreationSettings& settings){
@@ -2396,6 +2404,13 @@ void Engine::signalReadyOnce(){
 }
 
 void Engine::systemDraw(){
+    // The first drawn frame is the one that takes the splash away on Android 12+, so its time is
+    // the whole of "the app looks stuck on its logo": logged once, with the time since the start.
+    static bool firstDrawLogged = false;
+    if (!firstDrawLogged){
+        firstDrawLogged = true;
+        Log::print("[start] first drawn frame: %.0f ms after the start", stm_ms(stm_since(startupTime)));
+    }
     runFrame(true);
 }
 
