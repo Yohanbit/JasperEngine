@@ -46,13 +46,32 @@
     #include <csignal>
 #else
     #if defined(__ANDROID__)
-    // Bionic has no <link.h>: dl_iterate_phdr and struct dl_phdr_info are in <dlfcn.h>. <elf.h>
-    // and the ElfW() macros exist there, which is what the NT_GNU_BUILD_ID read below needs.
+    // Bionic has no <link.h>: dl_iterate_phdr and struct dl_phdr_info are declared in <dlfcn.h>.
+    // <elf.h> is there, but the ElfW() macros are glibc's, not Bionic's, so they are defined here
+    // from __LP64__ -- which is what they expand to on every platform that has them, and what
+    // made a release build fail with "unknown type name ElfW" the first time it reached this file.
     #include <dlfcn.h>
+    #include <elf.h>
+    #ifndef ElfW
+        #if defined(__LP64__)
+            #define ElfW(type) Elf64_##type
+        #else
+            #define ElfW(type) Elf32_##type
+        #endif
+    #endif
+    #ifndef PT_LOAD
+        #define PT_LOAD 1
+    #endif
+    #ifndef PT_NOTE
+        #define PT_NOTE 4
+    #endif
+    #ifndef NT_GNU_BUILD_ID
+        #define NT_GNU_BUILD_ID 3
+    #endif
     #else
     #include <link.h>
-    #endif
     #include <elf.h>
+    #endif
     #include <csignal>
 #endif
 
