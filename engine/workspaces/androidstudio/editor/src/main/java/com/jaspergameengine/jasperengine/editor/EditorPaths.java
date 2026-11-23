@@ -46,7 +46,7 @@ final class EditorPaths {
      * setenv for this process. Android keeps the C library's environment, and the native code
      * reads it with std::getenv, so this needs no help from the platform.
      */
-    private static void setEnv(String name, String value) {
+    static void setEnv(String name, String value) {
         try {
             android.system.Os.setenv(name, value, true);
         } catch (Throwable t) {

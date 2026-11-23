@@ -55,6 +55,13 @@ public class EditorActivity extends GameActivity {
         // it must be set before the first frame reads a setting
         EditorPaths.setProcessEnvironment(this);
 
+        // What this APK is, for the boot report and the editor's own About/status: the release
+        // name, build number and commit the release manager published (tools/android/releases.json)
+        EditorPaths.setEnv("JASPERENGINE_ANDROID_RELEASE_NAME", EditorBuildInfo.RELEASE_NAME);
+        EditorPaths.setEnv("JASPERENGINE_ANDROID_BUILD_NUMBER", String.valueOf(EditorBuildInfo.BUILD_NUMBER));
+        EditorPaths.setEnv("JASPERENGINE_ANDROID_COMMIT", EditorBuildInfo.COMMIT);
+        android.util.Log.i("JasperEngineEditor", "starting " + EditorBuildInfo.summary());
+
         // An editor session is long and a screen that dims mid-edit loses work in the user's hands
         getWindow().addFlags(LayoutParams.FLAG_KEEP_SCREEN_ON);
 

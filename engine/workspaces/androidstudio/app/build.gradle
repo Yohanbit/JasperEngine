@@ -110,6 +110,35 @@ android {
         prefab = true
     }
 
+    // What this APK is: the same identity the editor's module writes (tools/android/release_identity.py),
+    // as assets/jasper-build.txt, which tools/android/publish.py reads back out of the packaged APK.
+    // The game APK's versionName already identifies the game; this names the BUILD.
+    def gameIdentity = [:]
+    try {
+        def props = ['jasperReleaseName', 'jasperBuildNumber', 'jasperCommit']
+        if (props.every { project.hasProperty(it) }) {
+            gameIdentity = [releaseName: project.property('jasperReleaseName'),
+                            buildNumber: project.property('jasperBuildNumber'),
+                            commit     : project.property('jasperCommit')]
+        } else {
+            def out = new ByteArrayOutputStream()
+            exec {
+                commandLine 'python3', jasperengineRootAbs + '/tools/android/release_identity.py', '--json'
+                standardOutput = out
+                ignoreExitValue = true
+            }
+            def parsed = new groovy.json.JsonSlurper().parseText(out.toString())
+            gameIdentity = [releaseName: parsed.releaseName, buildNumber: parsed.buildNumber, commit: parsed.commit]
+        }
+    } catch (Exception e) {
+        logger.lifecycle("release identity unavailable: " + e.message)
+        gameIdentity = [releaseName: 'unidentified', buildNumber: 0, commit: 'unknown']
+    }
+    def gameStampDir = new File(projectDir, 'src/main/assets')
+    gameStampDir.mkdirs()
+    new File(gameStampDir, 'jasper-build.txt').text =
+        "${gameIdentity.releaseName} build=${gameIdentity.buildNumber} commit=${gameIdentity.commit}\n"
+
     sourceSets {
         main {
             java.srcDirs = [jasperengineRootAbs+'/platform/android/java']

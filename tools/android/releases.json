@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Every JasperEngine Android APK, in order. tools/android/release_identity.py reads this to name",
+    "a build; tools/android/publish.py appends to it when an APK is published with its SHA-256.",
+    "A release entry is keyed by the exact commit it was built from, so the same commit always",
+    "yields the same name and a different commit cannot borrow it.",
+    "'V8' is the reference APK that was on the phone before this port (the game runtime built from",
+    "engine/project, applicationId com.yourcompany.project). It is kept, never replaced: the RC",
+    "line below is the integrated editor+build work, a different package.",
+    "kind: v8 | rc | stable. Only the release manager adds 'stable'."
+  ],
+  "buildNumber": 8,
+  "releases": [
+    {
+      "name": "V8",
+      "number": 8,
+      "kind": "v8",
+      "versionCode": 1,
+      "commit": null,
+      "package": "com.yourcompany.project",
+      "abis": ["arm64-v8a"],
+      "sha256": null,
+      "date": null,
+      "notes": "The reference build that was installed on the phone: the game runtime of engine/project (the J logo image). Kept as the baseline the port is compared against. Its commit was not recorded when it was built and cannot be recovered from the APK, which is why every release after it records one."
+    }
+  ]
+}

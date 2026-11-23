@@ -94,6 +94,11 @@ done
 for test in tools/ci/test_*.sh; do
     check bash "$test"
 done
+# the release tooling (tools/android): the APK manifest reader and the identity rules that name
+# a build, which no tools/ci glob reaches
+for test in tools/android/test_*.py; do
+    check python3 -I "$test"
+done
 
 # the workflows
 check pinned_uses
