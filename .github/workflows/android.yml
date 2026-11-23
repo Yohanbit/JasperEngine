@@ -99,18 +99,19 @@ jobs:
         run: |
           mkdir -p build/android
           set +e
-          tools/ci/logged.sh android-editor 'bash -c "
-            cd engine/workspaces/androidstudio
-            ndk=\$(sed -n \"s/^ *ndkVersion = \\\"\\(.*\\)\\\"\$/\1/p\" editor/build.gradle)
-            [[ -n \"\$ndk\" ]] || { echo \"no ndkVersion in editor/build.gradle\"; exit 1; }
-            if [[ ! -f \"\$ANDROID_HOME/ndk/\$ndk/source.properties\" ]]; then
-              /src/tools/ci/retry.sh bash -c \"sdkmanager --install ndk;\$ndk > /dev/null && test -f \\\"\$ANDROID_HOME/ndk/\$ndk/source.properties\\\"\"
-            fi
-            JASPERENGINE_ANDROID_ABIS=\$ANDROID_ABIS CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug
-          "'
-          status=$?
-          apk=engine/workspaces/androidstudio/editor/build/outputs/apk/debug/editor-debug.apk
-          if [[ -f $apk ]]; then cp "$apk" build/android/jasperengine-editor.apk; fi
+          cd engine/workspaces/androidstudio
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' editor/build.gradle)
+          if [[ -z $ndk ]]; then echo "no ndkVersion in editor/build.gradle"; exit 1; fi
+          if [[ ! -f "$ANDROID_HOME/ndk/$ndk/source.properties" ]]; then
+            # (the $ is expanded by the shell retry.sh runs, not here: SC2016)
+            # shellcheck disable=SC2016
+            /src/tools/ci/retry.sh bash -c "sdkmanager --install 'ndk;$ndk' > /dev/null && test -f '$ANDROID_HOME/ndk/$ndk/source.properties'"
+          fi
+          mkdir -p ../../../build/test-results
+          CMAKE_CXX_COMPILER_LAUNCHER=ccache ./gradlew --no-daemon :editor:assembleDebug 2>&1 | tee ../../../build/test-results/android-editor.log
+          status=${PIPESTATUS[0]}
+          apk=editor/build/outputs/apk/debug/editor-debug.apk
+          if [[ -f $apk ]]; then cp "$apk" ../../../build/android/jasperengine-editor.apk; fi
           exit $status
 
       # The run's logs and artifacts cannot be read from a session outside this repository's own
