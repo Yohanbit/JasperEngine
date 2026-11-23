@@ -97,7 +97,11 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < finding.missingSidecars.size(); i++) {
             printf("%s%s", i ? "," : "", finding.missingSidecars[i].c_str());
         }
-        printf("\t%u\n", finding.orientation);
+        printf("\t%u\t", finding.orientation);
+    for (size_t i = 0; i < finding.sidecarAssetNames.size(); i++) {
+        printf("%s%s", i ? "," : "", finding.sidecarAssetNames[i].c_str());
+    }
+    printf("\n");
     }
     printf("#\t%d\t%d\t%llu\t%llu\t%d\t", report.broken, report.notes,
            (unsigned long long)report.largestDecodedBytes,
@@ -230,6 +234,7 @@ def main(argv):
                 "scale": float(fields[9]),
                 "sidecars": [s for s in fields[10].split(",") if s],
                 "orientation": int(fields[11]) if len(fields) > 11 else 0,
+                "sidecarAssetNames": [s for s in (fields[12] if len(fields) > 12 else "").split(",") if s],
             })
 
     if arguments.json:
@@ -241,6 +246,10 @@ def main(argv):
             mark = "!" if finding["severity"] == "BROKEN" else "-"
             print(f"{mark} {finding['file']} -> {finding['assetName']} ({finding['type']})")
             print(f"    {finding['message']}")
+            if finding["sidecarAssetNames"]:
+                pairs = [f"{uri} -> {name}" for uri, name in
+                         zip(finding["sidecars"], finding["sidecarAssetNames"])]
+                print("    they land as: " + ", ".join(pairs))
         if summary:
             total = len(findings)
             print()

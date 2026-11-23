@@ -87,6 +87,9 @@ namespace jasperengine::android {
         uint32_t orientation = 0;
         // a model's external dependencies, by the URI the file wrote (empty for anything else)
         std::vector<std::string> missingSidecars;
+        // and the name each of them lands under once the import flattens the folder: the caller
+        // asks for that file and writes it under this name (a two-model project cannot collide)
+        std::vector<std::string> sidecarAssetNames;
         // the image is reduced to this scale of each side (1.0 when it is not)
         double scale = 1.0;
     };
@@ -268,8 +271,13 @@ namespace jasperengine::android {
             // an ASCII .gltf may name buffers and textures beside itself, which a phone cannot
             // hand over as one import: the report has to say which files to bring
             if (isAsciiGltf(leaf)) {
-                const SidecarReport sidecars = gltfSidecars(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+                const std::string gltfText(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                const SidecarReport sidecars = gltfSidecars(gltfText);
                 finding.missingSidecars = sidecars.requiredFiles();
+                const ModelImportPlan import = planModelImport(std::string(gltfText), leaf);
+                for (const SidecarImport& sidecar : import.sidecars) {
+                    finding.sidecarAssetNames.push_back(sidecar.assetName);
+                }
                 const std::string sentence = sidecarSentence(sidecars);
                 if (!sentence.empty()) {
                     finding.severity = sidecars.parsed ? PreflightSeverity::Note : PreflightSeverity::Broken;
