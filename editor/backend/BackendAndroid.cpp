@@ -19,6 +19,7 @@
 #include "Theme.h"
 
 #include "AndroidTextInput.h"
+#include "AndroidTouchGestures.h"
 #include "Engine.h"
 #include "Input.h"
 #include "Log.h"
@@ -608,7 +609,68 @@ namespace jasperengine::editor {
             }
         }
 
+        // Input's touches, filled from the same motion events the ImGui pointer is built from.
+        //
+        // Why it matters: AndroidTouchGestures.h recognises long press, tap/double tap, pinch and
+        // drag from `Input::getTouches()`, and nothing on Android ever added one -- the editor sent
+        // every finger straight to ImGui and the engine's own touch state stayed empty, so no
+        // gesture could fire and a game played in this build saw no touches either. The events are
+        // already here, so the same loop fills both.
+        //
+        // `seconds` is Input's own clock (Input::getInputTime), not a fresh one: a gesture must not
+        // advance while the engine's input time is paused (the editor's Play stop).
+        void feedInputTouches(android_input_buffer* buffer){
+            const int32_t action = (buffer->motionEventsCount > 0)
+                ? (buffer->motionEvents[0].action & AMOTION_EVENT_ACTION_MASK)
+                : AMOTION_EVENT_ACTION_CANCEL;
+            (void)action;
+
+            // every finger this batch knows about, so one that lifted is removed once
+            bool seen[32] = {};
+            for (uint64_t i = 0; i < buffer->motionEventsCount; ++i){
+                const GameActivityMotionEvent* event = &buffer->motionEvents[i];
+                const int32_t eventAction = event->action & AMOTION_EVENT_ACTION_MASK;
+
+                if (eventAction == AMOTION_EVENT_ACTION_CANCEL){
+                    Input::clearTouches();
+                    return;
+                }
+
+                for (int32_t p = 0; p < static_cast<int32_t>(event->pointerCount) && p < 32; ++p){
+                    const GameActivityPointerAxes* pointer = &event->pointers[p];
+                    const int id = pointer->id;
+                    if (id < 0 || id >= 32)
+                        continue;
+                    const float x = GameActivityPointerAxes_getX(pointer);
+                    const float y = GameActivityPointerAxes_getY(pointer);
+
+                    // DOWN and POINTER_DOWN add; MOVE repositions; UP and POINTER_UP remove.
+                    // GameActivity reports the whole pointer set on MOVE, so only the finger that
+                    // moved needs repositioning and the rest are already where they were.
+                    const bool lifts = eventAction == AMOTION_EVENT_ACTION_UP ||
+                                       (eventAction == AMOTION_EVENT_ACTION_POINTER_UP &&
+                                        p == ((event->action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+                                              AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT));
+
+                    if (lifts){
+                        Input::removeTouch(id);
+                        continue;
+                    }
+
+                    if (!seen[id]){
+                        // addTouch adds a new finger and repositions one already down, so a MOVE of
+                        // an existing finger is the same call
+                        Input::addTouch(id, x, y);
+                        seen[id] = true;
+                    } else {
+                        Input::setTouchPosition(id, x, y);
+                    }
+                }
+            }
+        }
+
         void processMotionEvents(android_input_buffer* buffer){
+            feedInputTouches(buffer);
             ImGuiIO& io = ImGui::GetIO();
             for (uint64_t i = 0; i < buffer->motionEventsCount; ++i){
                 GameActivityMotionEvent* event = &buffer->motionEvents[i];
@@ -676,8 +738,6 @@ namespace jasperengine::editor {
                 }
             }
 
-            // A long press on Android reports nothing special by default; the editor's context
-            // click (button 1) comes from the toolbars instead, which suits a touch screen better.
             (void)gPointerDown;
         }
 
@@ -696,6 +756,44 @@ namespace jasperengine::editor {
                 // the state was taken: GameActivity does not hand it over twice
                 static_cast<android_app*>(context)->textInputState = false;
             }, app);
+        }
+
+        // The gesture recognizer's state, kept between frames (AndroidTouchGestures.h's Recognizer
+        // is a plain value: it holds the last positions and the tap window).
+        jasperengine::android::RecognizerState gGestures;
+        volatile bool gLongPressPending = false;
+
+        // Advances the recognizer with this frame's touches and turns a long press into the editor's
+        // context click. This is what the old code here said did not exist: "A long press on Android
+        // reports nothing special by default; the editor's context click (button 1) comes from the
+        // toolbars instead". Holding a finger on an object is the phone's way of asking for its menu,
+        // and there is no reason to make the user find a toolbar button for it.
+        //
+        // The press is cancelled by moving further than the slop, so a drag never opens a menu, and
+        // one that becomes a long press is consumed so it does not also fire as a tap.
+        void pumpGestures(){
+            const std::vector<Touch> touches = Input::getTouches();
+            const float seconds = static_cast<float>(Input::getInputTime());
+
+            auto& state = gGestures;
+            jasperengine::android::updateLongPress(state, touches, seconds);
+            if (state.longPress.triggered){
+                // held still long enough: the context click, at the finger
+                ImGuiIO& io = ImGui::GetIO();
+                io.AddMousePosEvent(state.longPress.position.x, state.longPress.position.y);
+                io.AddMouseButtonEvent(1, true);
+                gLongPressPending = true;
+            }
+            if (gLongPressPending && state.longPress.pointer < 0){
+                // the finger that held lifted: release the button the press opened
+                ImGui::GetIO().AddMouseButtonEvent(1, false);
+                gLongPressPending = false;
+            }
+
+            // the tap and the double tap are kept current so a future consumer (a double-tap zoom, a
+            // tap-to-select) does not have to start its own timing; nothing reads them yet
+            jasperengine::android::updateTap(state, touches);
+            jasperengine::android::updateDrag(state.drag, touches);
         }
 
         void onAppCmd(android_app* app, int32_t cmd){
@@ -860,6 +958,10 @@ namespace jasperengine::editor {
                     processMotionEvents(inputBuffer);
                 android_app_clear_input_buffers(gAndroidApp, inputBuffer);
             }
+
+            // After the events, before the frame draws: a finger that has been down long enough
+            // becomes this frame's context click (see pumpGestures).
+            pumpGestures();
 
             android_poll_source* source = nullptr;
             int events = 0;

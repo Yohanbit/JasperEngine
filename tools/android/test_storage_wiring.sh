@@ -25,7 +25,7 @@ OUT="${OUT:-build/android-storage-wiring}"
 mkdir -p "$OUT"
 
 INCLUDES=(
-    -I engine -I engine/renders -I engine/core -I engine/core/script
+    -I engine -I engine/renders -I engine/core -I engine/core/script -I engine/core/math -I engine/core/input
     -I engine/libs -I engine/libs/json -I engine/libs/sokol -I engine/libs/tinyxml2
     -I engine/platform/android
     -I libs/imgui -I libs/lua -I libs/lua/src
@@ -62,9 +62,11 @@ STUBS
 SOURCES=(
     engine/tests/core/platform/AndroidStorageWiringTest.cpp
     engine/tests/core/platform/AndroidStorageWritePreflightTest.cpp
+    engine/tests/core/platform/AndroidTouchFeedingTest.cpp
     "$OUT/stubs.cpp"
     engine/core/System.cpp
     engine/core/Log.cpp
+    engine/core/math/Vector2.cpp
     engine/core/log/Logger.cpp
     engine/core/io/Data.cpp
     engine/core/io/FileData.cpp

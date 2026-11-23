@@ -190,7 +190,14 @@ namespace jasperengine::android {
         // a new press, when exactly one finger is down (two fingers are a pinch, not a hold)
         if (touches.size() != 1) return;
         const Touch& only = touches.front();
-        if (only.phase != TouchPhase::BEGAN || (only.position - only.startPosition).length() > options.slop) return;
+        // Not `phase != BEGAN`: BEGAN is true for the one frame Input reports a finger in, so a
+        // finger that is held still is STATIONARY for every frame after its first -- and a press
+        // that required BEGAN every frame could only ever start on the frame the finger landed,
+        // which no caller can guarantee (a frame may pass between the touch and the first read).
+        // The rule is what a hold is: one finger down, still near where it touched, not lifting.
+        // A press that started and then moved is caught above, by the slop test on the owner.
+        if (only.phase == TouchPhase::ENDED || only.phase == TouchPhase::CANCELED ||
+            (only.position - only.startPosition).length() > options.slop) return;
         press.pointer = only.pointer;
         press.position = only.position;
         press.heldSeconds = only.time;
