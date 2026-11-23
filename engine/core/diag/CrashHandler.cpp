@@ -6,6 +6,13 @@
 // report hook and the deliberate crashes. Nothing here runs inside a signal handler; the
 // handler-side code is CrashHandlerPosix.cpp, CrashHandlerWin.cpp and CrashHandlerWeb.cpp.
 
+// _GNU_SOURCE before any system header: Bionic gates dl_iterate_phdr and struct dl_phdr_info on it,
+// and the NDK toolchain does not define it. A feature macro set after a header has been read does
+// nothing, which is why this is the first line of code in the file.
+#if defined(__ANDROID__) && !defined(_GNU_SOURCE)
+    #define _GNU_SOURCE
+#endif
+
 #include "CrashHandler.h"
 #include "detail/CrashState.h"
 
@@ -46,10 +53,11 @@
     #include <csignal>
 #else
     #if defined(__ANDROID__)
-    // Bionic has no <link.h>: dl_iterate_phdr and struct dl_phdr_info are declared in <dlfcn.h>.
-    // <elf.h> is there, but the ElfW() macros are glibc's, not Bionic's, so they are defined here
-    // from __LP64__ -- which is what they expand to on every platform that has them, and what
-    // made a release build fail with "unknown type name ElfW" the first time it reached this file.
+    // Bionic declares dl_iterate_phdr and struct dl_phdr_info in <dlfcn.h>, and only when
+    // _GNU_SOURCE is defined -- which the NDK's CMake toolchain does not set by default, so both
+    // were undeclared here ("use of undeclared identifier dl_iterate_phdr", "incomplete type
+    // struct dl_phdr_info"). <elf.h> is present, but the ElfW() macros are glibc's, not Bionic's,
+    // so they are defined below from __LP64__ -- the same thing they expand to everywhere else.
     #include <dlfcn.h>
     #include <elf.h>
     #ifndef ElfW
