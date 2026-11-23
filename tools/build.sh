@@ -834,6 +834,10 @@ android)
     # runner. Eight CI runs were spent looking for what composed `2`. Now the Gradle failure is named
     # and its status is the lane's.
     build_status=0
+    # Say what the container is, before the build: the block below failing without writing its log
+    # looked exactly like the block never running, and there was no way to tell from outside.
+    run bash -euo pipefail -c 'echo "android: running in $(uname -a), ANDROID_HOME=${ANDROID_HOME:-unset}, workspace=$(pwd)";
+        test -x engine/workspaces/androidstudio/gradlew || { echo "android: gradlew is missing in the container" >&2; exit 4; }'
     run bash -euo pipefail -c "
         cd engine/workspaces/androidstudio
         ndk=\$(sed -n 's/^ *ndkVersion = \"\\(.*\\)\"\$/\\1/p' app/build.gradle)
