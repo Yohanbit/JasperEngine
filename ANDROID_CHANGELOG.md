@@ -94,6 +94,11 @@ with no device to run it on.
   stopped overwriting each other. 5 cases, 75 total.
 - The report prints the pairs: `Body.bin -> body_body.bin, textures/common.png -> body_common.png`.
 
+### `absentSidecars` (`3dccd9c1`)
+
+- A `.gltf` picked with only some of its files now names the ones that are not there
+  (`PreflightInput::companionNames` → `absentSidecars`, matched on the leaf). 2 cases, 77 total.
+
 ## Still not done
 
 - Nothing here has run on a phone, an emulator or an APK: no SDK, no NDK, no `javac`, no Docker in

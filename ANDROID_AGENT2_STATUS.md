@@ -66,7 +66,7 @@ headers added here follow it exactly, which also means:
 ## 3. Implemented (this branch)
 
 All nine (eight headers) are free of Android headers, no new build wiring, C++20,
-`-Wall -Wextra -Werror` clean on GCC 12, and **75 gtest cases passing**. A runnable tool exposes the
+`-Wall -Wextra -Werror` clean on GCC 12, and **77 gtest cases passing**. A runnable tool exposes the
 whole thing: `tools/android-asset-report.py <project>`. Every header is included
 twice by the suite on purpose (see bug 10d). See `ANDROID_TEST_MATRIX.md` for the evidence of every
 case and the red control.
