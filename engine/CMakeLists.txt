@@ -2424,7 +2424,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     # The names are literal on purpose. OPENGL_LIB is set inside the standalone block above, which
     # is closed by the time this library is declared, so it is empty in an editor build -- an
     # earlier attempt passed ${OPENGL_LIB} and linked nothing at all.
-    target_link_libraries(jasperengine PUBLIC GLESv3 EGL)
+    #
+    # libandroid is where the NDK puts the asset manager (AAssetManager_open, AAsset_close,
+    # AAsset_openFileDescriptor64: MediaCodecBackend.cpp opens a video from the APK's assets) and
+    # liblog is __android_log_print. Both live in PLATFORM_LIBS with the same problem.
+    target_link_libraries(jasperengine PUBLIC GLESv3 EGL android log)
 endif()
 
 if(JASPERENGINE_TITLE_ART_LIBS)
