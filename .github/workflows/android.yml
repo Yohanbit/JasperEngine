@@ -122,6 +122,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/android/release_identity.py --json | tee identity.json
+          # the shape is checked before it is used: a flag without its -P is a task name to Gradle,
+          # and five on one line arrive as one argument to mapfile. Run 45112874466 failed exactly so.
+          python3 -I tools/android/test_release_identity_gradle.py
           python3 tools/android/release_identity.py --gradle | tee gradle-identity.txt
           # one -P per line, in a file both APK steps read: a release name has a space in it
           # ("Android RC1"), and mapfile keeps a line whole where word splitting would not.

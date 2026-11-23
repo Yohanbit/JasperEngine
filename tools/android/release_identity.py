@@ -89,14 +89,22 @@ def identity(manifest: dict | None = None, commit: str | None = None) -> dict:
 
 
 def gradle_assignments(ident: dict) -> str:
-    """The -P flags Gradle reads (editor/build.gradle, app/build.gradle)."""
-    return (
-        f"jasperReleaseName={ident['releaseName']} "
-        f"jasperBuildNumber={ident['buildNumber']} "
-        f"jasperCommit={ident['commit']} "
-        f"jasperVersionCode={ident['versionCode']} "
-        f"jasperDirty={'true' if ident['dirty'] else 'false'}"
-    )
+    """The -P flags Gradle reads (editor/build.gradle, app/build.gradle), ONE PER LINE.
+
+    Both halves of that are load-bearing, and both were wrong:
+
+    - each flag needs its own -P. Gradle reads a bare `name=value` as a TASK NAME, so the build
+      failed with "Task 'jasperReleaseName=candidate-86430b3 jasperBuildNumber=9 ...' not found".
+    - one per line, because tools/build.sh reads this file into an array with `mapfile`, which
+      splits on newlines: on one line the five assignments arrived as a single argument.
+    """
+    return "\n".join((
+        f"-PjasperReleaseName={ident['releaseName']}",
+        f"-PjasperBuildNumber={ident['buildNumber']}",
+        f"-PjasperCommit={ident['commit']}",
+        f"-PjasperVersionCode={ident['versionCode']}",
+        f"-PjasperDirty={'true' if ident['dirty'] else 'false'}",
+    ))
 
 
 def main(argv: list[str]) -> int:
