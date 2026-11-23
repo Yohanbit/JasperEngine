@@ -8,21 +8,11 @@ apply plugin: 'com.android.application'
 def jasperengineRoot = "../../../.."
 def jasperengineRootAbs = file(jasperengineRoot).toString()
 
-// JasperBootLog is shared with the game runtime and depends on nothing else in its package, so it
-// is copied in rather than the whole platform/android/java directory being a source root (which
-// would drag in MainActivity and the bridge).
-tasks.register('syncSharedJava', Sync) {
-    from(jasperengineRootAbs + '/platform/android/java/com/jaspergameengine/jasperengine/JasperBootLog.java') {
-        into 'com/jaspergameengine/jasperengine'
-    }
-    into layout.buildDirectory.dir("shared-java")
-}
-// Tied to the compiler tasks themselves, not to preBuild: the android plugin registers its
-// lifecycle tasks after this block, and a name that does not exist makes the dependency silently
-// never run. Both Java and Kotlin compile read build/shared-java, and Gradle 9 refuses a task that
-// reads another's output without saying so.
-tasks.withType(JavaCompile).configureEach { dependsOn 'syncSharedJava' }
-tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach { dependsOn 'syncSharedJava' }
+// No shared Java is copied in. The editor's start report is its own class, in this module: it
+// names the editor's own paths and version, and this module must not see the game runtime's
+// MainActivity and lifecycle bridge, which link the game's native library. An earlier attempt to
+// Sync JasperBootLog into build/shared-java made Gradle 9 fight the source set over a generated
+// directory; a self-contained report has no such problem and one fewer moving part.
 
 android {
     compileSdk 36

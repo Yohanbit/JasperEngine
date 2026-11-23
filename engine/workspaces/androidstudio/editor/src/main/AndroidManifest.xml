@@ -24,17 +24,6 @@
             </intent-filter>
         </activity>
 
-        <!-- JasperBootLog's share sheet: Downloads/jasperengine-boot.txt to Drive or a chat without
-             a file manager that shows hidden folders -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.bootlog"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/boot_log_paths" />
-        </provider>
     </application>
 
     <!-- the editor's GL context is OpenGL ES 3.0 -->

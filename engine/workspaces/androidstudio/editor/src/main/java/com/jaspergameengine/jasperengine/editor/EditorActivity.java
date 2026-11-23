@@ -12,7 +12,6 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.google.androidgamesdk.GameActivity;
-import com.jaspergameengine.jasperengine.JasperBootLog;
 
 /**
  * The JasperEngine editor on Android.
@@ -22,8 +21,8 @@ import com.jaspergameengine.jasperengine.JasperBootLog;
  * the library name and that this activity keeps the system bars visible instead of hiding them:
  * an editor's menus must not be swallowed by a fullscreen mode meant for games.
  *
- * Debug builds write Downloads/jasperengine-boot.txt (JasperBootLog) here too, so the editor can
- * be diagnosed on a phone without adb.
+ * Debug builds write Downloads/editor-boot.txt (EditorBootLog) so the editor can be diagnosed on a
+ * phone without adb.
  */
 public class EditorActivity extends GameActivity {
 
@@ -45,9 +44,9 @@ public class EditorActivity extends GameActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        if (isDebuggable()) JasperBootLog.install(this);
+        if (isDebuggable()) EditorBootLog.install(this);
         if (libraryLoadError != null) {
-            if (isDebuggable()) JasperBootLog.dump("library load failed: " + libraryLoadError, libraryLoadError);
+            if (isDebuggable()) EditorBootLog.dump("library load failed: " + libraryLoadError, libraryLoadError);
             throw new RuntimeException("jasperengine-editor did not load: " + libraryLoadError, libraryLoadError);
         }
 
@@ -78,6 +77,6 @@ public class EditorActivity extends GameActivity {
     protected void onStop() {
         super.onStop();
         // sharing the report is the only way off the phone without adb
-        if (isDebuggable()) JasperBootLog.dumpAsync("editor activity stopped");
+        if (isDebuggable()) EditorBootLog.dumpAsync("editor activity stopped");
     }
 }
