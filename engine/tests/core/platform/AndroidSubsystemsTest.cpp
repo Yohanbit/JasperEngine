@@ -1041,3 +1041,99 @@ TEST(AndroidImportPreflight, AFileThatIsNotAnAssetIsCopiedAndNotReportedAsBroken
     EXPECT_EQ(finding.severity, PreflightSeverity::Fine);
     EXPECT_EQ(finding.message, "not an asset type this engine imports; it is copied as it is");
 }
+
+// ---- model sidecars
+
+TEST(AndroidModelSidecars, AGltfNamesTheFilesAPhoneCannotBringAlong) {
+    const std::string text = R"({"asset":{"version":"2.0"},
+        "buffers":[{"uri":"Body.bin","byteLength":1024}],
+        "images":[{"uri":"textures/skin.png"},{"uri":"textures/skin.png"}],
+        "meshes":[]})";
+    const SidecarReport report = gltfSidecars(text);
+    EXPECT_TRUE(report.parsed);
+    EXPECT_EQ(report.externalBuffers, 1);
+    EXPECT_EQ(report.externalImages, 2);
+    EXPECT_FALSE(report.isSelfContained());
+
+    // the same texture named twice is one file to bring
+    const std::vector<std::string> required = report.requiredFiles();
+    ASSERT_EQ(required.size(), 2u);
+    EXPECT_EQ(required[0], "Body.bin");
+    EXPECT_EQ(required[1], "textures/skin.png");
+    EXPECT_NE(sidecarSentence(report).find("1 buffer file and 2 texture files"), std::string::npos)
+        << sidecarSentence(report);
+}
+
+TEST(AndroidModelSidecars, AGlbOrACookedGltfNeedsNothingElse) {
+    // no buffers at all: nothing is external
+    EXPECT_TRUE(gltfSidecars(R"({"asset":{"version":"2.0"},"meshes":[]})").isSelfContained());
+
+    // a buffer with no URI and an image in a bufferView are the GLB's own chunks
+    const SidecarReport glb = gltfSidecars(R"({"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":1024}],"images":[{"bufferView":0,"mimeType":"image/png"}]})");
+    EXPECT_TRUE(glb.parsed);
+    EXPECT_TRUE(glb.isSelfContained());
+    EXPECT_TRUE(glb.requiredFiles().empty());
+
+    // a data: URI carries its bytes in the file, so it is not something to bring
+    const SidecarReport inline_data = gltfSidecars(R"({"buffers":[{"uri":"data:application/octet-stream;base64,AA=="}]})");
+    EXPECT_TRUE(inline_data.isSelfContained());
+    EXPECT_EQ(inline_data.sidecars.size(), 1u);
+    EXPECT_TRUE(inline_data.sidecars[0].embedded);
+}
+
+TEST(AndroidModelSidecars, AnEmptyUriIsNotAFileToBring) {
+    // found by fuzzing: "uri": "" listed an empty name, which a user cannot act on
+    const SidecarReport report = gltfSidecars(R"({"buffers":[{"uri":""}],"images":[{"uri":""}]})");
+    EXPECT_TRUE(report.parsed);
+    EXPECT_TRUE(report.requiredFiles().empty());
+    EXPECT_TRUE(report.isSelfContained());
+}
+
+TEST(AndroidModelSidecars, AMalformedGltfSaysSoInsteadOfClaimingNoDependencies) {
+    const SidecarReport report = gltfSidecars(R"({"buffers":[)");
+    EXPECT_FALSE(report.parsed);
+    EXPECT_FALSE(report.error.empty());
+    EXPECT_FALSE(sidecarSentence(report).empty());
+    EXPECT_NE(sidecarSentence(report).find("malformed"), std::string::npos);
+}
+
+TEST(AndroidModelSidecars, AUriIsNotAPath) {
+    // percent-encoded UTF-8, a query string, and a backslash a Windows exporter left behind
+    EXPECT_EQ(detail::sidecarFileName("textures/skin%20map.png"), "skin map.png")
+        << "the name the report gives must be the name the file has";
+    EXPECT_EQ(detail::sidecarFileName("Body.bin?v=2#frag"), "Body.bin");
+    EXPECT_EQ(detail::sidecarFileName("textures\\skin.png"), "skin.png");
+    EXPECT_EQ(detail::sidecarFileName("plain.png"), "plain.png");
+}
+
+TEST(AndroidImportPreflight, AGltfThatNeedsItsBuffersIsANoteThatNamesThemAndAMalformedOneIsBroken) {
+    const std::string gltf = R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Body.bin"}],"images":[{"uri":"Body.png"}]})";
+    PreflightInput file;
+    file.fileName = "Characters/Body.gltf";
+    file.prefix.assign(gltf.begin(), gltf.end());
+    const PreflightFinding finding = preflightOne(file, PreflightOptions{});
+    EXPECT_EQ(finding.type, AssetType::Model);
+    EXPECT_EQ(finding.severity, PreflightSeverity::Note);
+    EXPECT_EQ(finding.missingSidecars.size(), 2u) << "the import can offer to bring them";
+    EXPECT_NE(finding.message.find("1 buffer file and 1 texture file"), std::string::npos) << finding.message;
+
+    // the same name but not JSON: the model cannot load at all, and "no dependencies" would be a lie
+    PreflightInput broken;
+    broken.fileName = "Characters/Body.gltf";
+    broken.prefix = {'{', '"', 'b', 'u', 'f'};
+    const PreflightFinding brokenFinding = preflightOne(broken, PreflightOptions{});
+    EXPECT_EQ(brokenFinding.severity, PreflightSeverity::Broken);
+}
+
+TEST(AndroidImportPreflight, AGlbIsOneFileAndNothingToSay) {
+    // "glTF" + a version and length: the binary form is self-contained by construction
+    std::vector<uint8_t> glb = {'g', 'l', 'T', 'F', 2, 0, 0, 0, 12, 0, 0, 0};
+    PreflightInput file;
+    file.fileName = "Characters/Body.glb";
+    file.prefix = glb;
+    const PreflightFinding finding = preflightOne(file, PreflightOptions{});
+    EXPECT_EQ(finding.severity, PreflightSeverity::Fine);
+    EXPECT_TRUE(finding.missingSidecars.empty());
+    EXPECT_TRUE(finding.message.empty()) << finding.message;
+}

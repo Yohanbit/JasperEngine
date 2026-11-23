@@ -21,6 +21,7 @@
 #include "AndroidAssetImport.h"
 #include "AndroidImageLimits.h"
 #include "AndroidImageOrientation.h"
+#include "AndroidModelSidecars.h"
 #include "asset/AssetType.h"
 
 #include <cstdint>
@@ -79,6 +80,8 @@ namespace jasperengine::android {
         int importedHeight = 0;
         // EXIF orientation, 1..8; 0 when the file has none (which is upright)
         uint32_t orientation = 0;
+        // a model's external dependencies, by the URI the file wrote (empty for anything else)
+        std::vector<std::string> missingSidecars;
         // the image is reduced to this scale of each side (1.0 when it is not)
         double scale = 1.0;
     };
@@ -245,6 +248,18 @@ namespace jasperengine::android {
         }
 
         if (finding.type == AssetType::Model) {
+            // an ASCII .gltf may name buffers and textures beside itself, which a phone cannot
+            // hand over as one import: the report has to say which files to bring
+            if (isAsciiGltf(leaf)) {
+                const SidecarReport sidecars = gltfSidecars(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+                finding.missingSidecars = sidecars.requiredFiles();
+                const std::string sentence = sidecarSentence(sidecars);
+                if (!sentence.empty()) {
+                    finding.severity = sidecars.parsed ? PreflightSeverity::Note : PreflightSeverity::Broken;
+                    finding.message = sentence;
+                }
+                return finding;
+            }
             // a model is binary glTF or FBX; the runtime has a glTF reader and no FBX one, and the
             // extension alone cannot tell a .glb from a .gltf that names external buffers
             const ImportKind kind = kindFromMagic(bytes);
