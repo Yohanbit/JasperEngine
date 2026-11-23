@@ -916,6 +916,12 @@ bool ProcessStream::start(const ProcessSpec& spec, Callbacks callbacks, std::str
         error = "not an absolute executable path: " + spec.exe.string();
         return false;
     }
+#if defined(__ANDROID__)
+    // The same reason as runProcess above: bionic has none of posix_spawn's functions, and an
+    // Android app cannot exec. The stream reports it as a failed start.
+    error = "Android cannot start external processes: " + spec.exe.string();
+    return false;
+#else
     (jobs::isMainThread() ? mainThreadSpawns : otherThreadSpawns)++;
     const std::string exe = spec.exe.string();
     std::vector<std::string> argStorage{exe};
@@ -1007,6 +1013,7 @@ bool ProcessStream::start(const ProcessSpec& spec, Callbacks callbacks, std::str
         s->readerDone = true;
     });
     return true;
+#endif // __ANDROID__
 }
 
 bool ProcessStream::writeStdin(const void* data, size_t size) {
