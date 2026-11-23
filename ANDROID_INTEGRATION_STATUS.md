@@ -6,6 +6,12 @@ or marked **unverified** with the reason. No row is marked done because a report
 Session branch: `arena/b99b8fb3-jasperengine` (this session's fixed branch, branched from
 `arena/8286230a-jasperengine` at `d996af6e`). Base of the fork: `main` at `92295dbf`.
 
+**This branch is the integration branch.** Checked with `git merge-base --is-ancestor`: `origin/main`
+(`92295dbf`) and `origin/arena/8286230a-jasperengine` (agent 1, now `daebd94b`) are both fully
+contained in it, and it adds this session's fixes on top. No separate branch was created, because a
+second branch would either duplicate this one or need a history rewrite — both forbidden. Candidate
+APKs are therefore cut from this branch and from nothing else (§4 of `ANDROID_RELEASE_STATUS.md`).
+
 ## 1. What exists in the fork today (audited, not assumed)
 
 | Thing | State | How it was checked |
@@ -54,21 +60,32 @@ whole invocation — including `:app`, the game sample APK, which is the APK `to
 produces and the one the user installs. Run 45096041001 shows it: step `APK` fails and step
 `Editor APK` is skipped.
 
-## 4. Defects found and *not* yet fixed (queued, with evidence)
+## 4. Defects found here and what happened to them
 
-These are real and located; they are listed here so the next session starts from a fact, not a
-memory.
+The full record, with what each one did to a person holding the phone, is `ANDROID_INTEGRATION_BUGS.md`.
+Summary, in the order they were found:
 
-| # | Defect | Evidence | Owner of the area |
+| # | Defect | State | Commit |
 | --- | --- | --- | --- |
-| A3-1 | **The editor backend never installs GameActivity's input filters.** GameActivity's glue ships `default_key_filter` and `default_motion_filter`; the default motion filter admits **only** `source == SOURCE_TOUCHSCREEN` (0x00001002). `NativeEngine.cpp:533-534` sets `app->motionEventFilter`/`app->keyEventFilter` directly (that is the engine's own host), but `BackendAndroid.cpp` never calls `android_app_set_motion_event_filter` / `android_app_set_key_event_filter`. On a tablet with a trackpad or a mouse the editor should expect no pointer events at all. | GameActivity API docs: "the default motion event filter will only allow touchscreen events through"; `engine/platform/android/NativeEngine.cpp:283-288,533-534` | `editor/backend/BackendAndroid.cpp` |
-| A3-2 | **The editor's soft keyboard cannot be typed into on most keyboards.** `Backend::showSoftKeyboard` calls `GameActivity_setImeEditorInfo(…, InputType_dot_TYPE_CLASS_TEXT, …)` where `InputType_dot_TYPE_CLASS_TEXT` is a *local* `constexpr int = 1` copy of the engine's (`NativeEngine.cpp:544`). Android's `TYPE_CLASS_TEXT` is `0x00000001` but its real editor type is `TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_*` — the safe call is `GameActivity_setImeEditorInfo(activity, GameActivity_getImeEditorInfo(...))` or at minimum `TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_NORMAL`; worth checking against the AGDK header before changing. | `editor/backend/BackendAndroid.cpp:333-345`; `engine/platform/android/NativeEngine.cpp:544-549` | `BackendAndroid.cpp` |
-| A3-3 | **The editor's key path drops every character key.** `processKeyEvents` maps only DEL/FORWARD_DEL/ENTER/ESCAPE/TAB/SPACE/DPAD/HOME/END/PAGE (via `imGuiKeyFromAndroid`) and `continue`s for everything else, so `A`…`Z`, digits and punctuation produce **no** `AddInputCharacter` — a text field fed only by a hardware keyboard gets nothing (the soft keyboard's text path through `queueText` does work). | `editor/backend/BackendAndroid.cpp` `processKeyEvents` | `BackendAndroid.cpp` |
-| A3-4 | **The eyedropper and TerrainEdit pressure read `Backend::penPressure()`, which returns −1 on Android** even though the engine's `NativeEngine.cpp` already has `stylusPressureOf()` reading `GameActivityPointerAxes_getToolType/getPressure`. The backend could feed it through as the engine does. | `editor/backend/BackendAndroid.cpp:649`, `editor/window/TerrainEditWindow.cpp:1392` | `BackendAndroid.cpp` |
-| A3-5 | **Nothing calls `android_app_set_key_event_filter`/`motion_event_filter`** (same as A3-1) means the editor's Back handling also depends on the default key filter's `AKEYCODE_BACK` behaviour; the engine's own `key_filter` shows the intended semantics (Back only accepted when it comes from the soft keyboard, so the system gesture still leaves the app). | `NativeEngine.cpp:283-288` | `BackendAndroid.cpp` |
-| A3-6 | **Settings/projects land in `filesDir/config` and `filesDir/projects` only.** `EditorPaths.java` exports `JASPERENGINE_ANDROID_CONFIG_DIR` and `JASPERENGINE_ANDROID_PROJECTS_DIR`; only the first is read (`editor/AppSettings.cpp:67`). The second has no reader, and `ProjectHubWindow::defaultLocation()` still resolves `$HOME/JasperEngine Projects` → `/JasperEngine Projects` on a phone. Projects therefore live where the user cannot see them from a file manager. | `grep -rn JASPERENGINE_ANDROID_PROJECTS_DIR` → only the Java writer; `editor/hub/ProjectHubWindow.cpp:54,76-80` | Agent 2's area (project storage) |
+| A3-1 | GameActivity's default motion filter admits only `SOURCE_TOUCHSCREEN`, so a trackpad, a mouse or a hovering stylus reached the editor as no events at all | **fixed** — both filters installed with the editor's rules | `0efd69600` |
+| A3-2 | The IME pre-edit type was spelled unclearly (`InputType_dot_TYPE_CLASS_TEXT`, `33554432`) | **not a defect** — `TYPE_CLASS_TEXT` (1) with `IME_FLAG_NO_FULLSCREEN` is right; the constants are now named and checked against the reference | `0efd69600` |
+| A3-3 | A hardware keyboard could not type: letters, digits and punctuation produced no character | **fixed** — full key map + Shift/Caps character path, 24 host checks | `0efd69600` |
+| A3-4 | `Backend::penPressure()` returned −1 although the engine already reads stylus pressure, so the terrain brush ignored how hard a stylus is pressed | **fixed** — returns `Input::getPenPressure()` | `1f9d40cfb` |
+| A3-5 | Same area as A3-1 (nothing installed the key filter) | **merged into A3-1**; the key filter is now explicit and BACK is admitted only from the soft keyboard | `0efd69600` |
+| A3-6 | `JASPERENGINE_ANDROID_PROJECTS_DIR` had no reader, so the Hub offered `/JasperEngine Projects`, which a phone refuses | **fixed** — `defaultLocation()` prefers the exported directory | `bc31db334` |
+| A3-7 | No SAF, so a project cannot be opened from Downloads or Drive | **open**, design work: SAF is asynchronous and needs a Java→native channel | — |
+| A3-8 | The editor had no clipboard at all (ImGui's clipboard callbacks were never set) | **fixed** — `EditorClipboard` + `EditorActivity` methods | `0efd69600` |
+| A3-9 | `:editor`'s Java source set pointed at a path that does not exist, failing the whole Gradle invocation | **fixed** | `f68b39ea7` |
+| A3-10 | A candidate APK would have had a `versionCode` below the installed V8, so the phone would refuse it | **fixed** | `6133b661a` |
+| A3-11 | `McpClient.cpp` used `posix_spawn`, which Bionic does not provide — the first real compiler error after the Java fix | **fixed** — the Android branch of the constructor throws with an explanation | `1d204377c` |
 
-Every row is a *code* fact checked in this checkout; none is a claim about the phone.
+### 4.1 What the CI says now, and how it is read
+
+The android lane's `Annotate the build errors` step (added by agent 1 in `daebd94b`, integrated
+here as `01044ce6a`) is the only readable output from this sandbox. It proved its worth
+immediately: run `45096599335` failed with `use of undeclared identifier 'posix_spawn'` in
+`editor/cli/McpClient.cpp:474`, ten lines of it, where the two earlier runs had said only
+`Process completed with exit code 1`.
 
 ## 5. Test infrastructure usable from this session
 
@@ -86,14 +103,29 @@ Tools installed into this sandbox for verification (not committed): `cmake 4.4.5
 
 ## 6. Next steps, in priority order
 
-1. Confirm `f68b39ea7` turns the android lane green (steps 8 and 9 `success`) and inspect the
-   editor APK's artifact presence (`jasperengine-editor.apk`).
-2. Fix A3-1 (input filters) — without it the editor is touch-only, and the touch-only path is the
-   one a phone needs, so it must be *explicitly* set rather than inherited by luck.
-3. Fix A3-3 (character keys from a hardware keyboard) and A3-2 (IME editor type) together, as one
-   change to the input path, then re-run the lane.
-4. A3-6 (projects location + `JASPERENGINE_ANDROID_PROJECTS_DIR` reader) once the build is green;
-   this is the difference between "an editor runs" and "a project can be found again".
-5. Physical-device validation is **impossible from this session** (no adb, no device). The
-   deliverable for the phone is the APK artifact plus `JasperBootLog` (already in the tree) that
-   writes `Downloads/jasperengine-boot.txt` without a PC.
+1. **Get both APKs built** (steps `APK` and `Editor APK` `success`). The Java source set, the input
+   backend, `McpClient`'s Android branch and the Hub path are each fixed; only the compiler knows
+   what is next, and the annotations now say it. Run `45099004930` is the one to watch.
+2. **Cut Android RC1** from this branch with `.github/workflows/android-release.yml` (dispatch
+   `name="Android RC1"`, `kind=rc`) once the lane is green. That workflow is the only path an APK
+   takes to becoming official; it builds, reads the identity back out of the packaged APK, records
+   the SHA-256, and attaches both APKs to a GitHub release. `ANDROID_RELEASE_STATUS.md` §3 gets the
+   real run and hashes when it exists — not before.
+3. **The phone's evidence.** Every fix above is `DEVICE UNVERIFIED`: no adb, no emulator, no device
+   in this environment, so nothing here ran on Android. The user installs the RC and reports what
+   the boot report (`Downloads/jasperengine-boot.txt`) and logcat say; A3-1/A3-3/A3-8 each have a
+   concrete press-and-see step in `ANDROID_INTEGRATION_BUGS.md`.
+4. **SAF (A3-7)** after RC1: without it a project cannot be opened from where the user keeps it,
+   which is the difference between a demo and a usable editor.
+5. Touch-first layout, the `PENDING` rows of `ANDROID_PARITY_MATRIX.md`, only after the above: they
+   make the editor pleasant, and none of them makes it usable for the first time.
+
+## 7. What this session did *not* do
+
+- **No test ran on Android.** No emulator (no KVM, no SDK), no device, no adb. Every "fixed" row in
+  §4 means *the code is right and the build compiles*; the device rows are the user's to confirm.
+- **No APK was published.** `android-release.yml` has never run — it is committed and its YAML
+  parses, but it needs a runner and the android image, neither of which exists here.
+- **The Gradle release-identity wiring has never executed.** `-P` properties, the `python3`
+  exec in `build.gradle` and the generated `EditorBuildInfo.java` are written and reviewed, but the
+  first execution will be the RC1 build.
