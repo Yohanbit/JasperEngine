@@ -172,6 +172,17 @@ namespace {
     std::string runShellCapture(const std::string& shell, const std::vector<std::string>& args, int timeoutMs, bool& aborted, const std::string& stopMarker = "") {
         aborted = false;
 
+#if defined(__ANDROID__)
+        // bionic declares posix_spawn's types but none of its functions, and an Android app has no
+        // shell to run besides: readShellEnv is a desktop feature (the editor asks the user's login
+        // shell for PATH so a git or an SDK found there is found here too). Returning nothing
+        // leaves the caller on the process environment it already has, which is what a phone has.
+        (void)shell;
+        (void)args;
+        (void)timeoutMs;
+        (void)stopMarker;
+        return "";
+#else
         int pipefd[2];
         if (pipe(pipefd) != 0) return "";
 
@@ -288,6 +299,7 @@ namespace {
 
         aborted = timedOut || flooded;
         return output;
+#endif
     }
 
     // Both markers must be there: a truncated capture is not a PATH.

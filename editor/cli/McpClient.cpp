@@ -31,11 +31,14 @@
 #include <csignal>
 #include <fcntl.h>
 #include <poll.h>
-#include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifndef __ANDROID__
+// bionic has no posix_spawn and no execve: an Android app cannot start another process at all
+#include <spawn.h>
 extern char** environ;
+#endif
 #endif
 
 namespace fs = std::filesystem;
@@ -438,6 +441,12 @@ StdioClient::StdioClient(const fs::path& executable, const std::vector<std::stri
     : stderrLog(workdir / "editor.stderr.log") {
     // writing to an editor that is gone must be an error, not a signal
     std::signal(SIGPIPE, SIG_IGN);
+#if defined(__ANDROID__)
+    // This client starts a second copy of the editor and talks to it over pipes. Android has no
+    // execve and no posix_spawn, and its app sandbox cannot load one anyway, so there is nothing
+    // to fall back to: the in-process call path is what works there.
+    throw ClientError(Connection, "Android cannot start a separate editor process: use the in-process call path");
+#else
     int input[2];
     int output[2];
     if (::pipe(input) != 0 || ::pipe(output) != 0) throw ClientError(Connection, "can't create the pipes to start the editor");
@@ -483,6 +492,7 @@ StdioClient::StdioClient(const fs::path& executable, const std::vector<std::stri
     childPid = static_cast<long>(pid);
     toChild = input[1];
     fromChild = output[0];
+#endif
 }
 
 bool StdioClient::exited(int& exitCode) {

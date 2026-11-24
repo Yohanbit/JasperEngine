@@ -80,8 +80,10 @@ if(NOT API_BACKEND)
         set(API_BACKEND "win")
     elseif(APPLE)
         set(API_BACKEND "mac")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        set(API_BACKEND "android")
     else()
-        message(FATAL_ERROR "No native editor backend for ${CMAKE_SYSTEM_NAME} (expected Linux, Windows, or macOS)")
+        message(FATAL_ERROR "No native editor backend for ${CMAKE_SYSTEM_NAME} (expected Linux, Windows, macOS, or Android)")
     endif()
 endif()
 message(STATUS "API backend is set to ${API_BACKEND}")
@@ -94,6 +96,10 @@ if(API_BACKEND STREQUAL "linux" OR API_BACKEND STREQUAL "win")
     if(NOT GRAPHIC_BACKEND STREQUAL "vulkan" AND NOT GRAPHIC_BACKEND STREQUAL "glcore")
         message(FATAL_ERROR "API_BACKEND=${API_BACKEND} supports GRAPHIC_BACKEND vulkan or glcore")
     endif()
+elseif(API_BACKEND STREQUAL "android")
+    # An Android device has OpenGL ES 3 (GL_VERSION 410 core and Vulkan are not what an EGL
+    # window surface gives an app); the engine's own Android lane is gles3 only too.
+    set(GRAPHIC_BACKEND "gles3")
 else()
     set(GRAPHIC_BACKEND "metal")
 endif()
@@ -305,6 +311,29 @@ elseif(API_BACKEND STREQUAL "win")
     else()
         list(APPEND BACKEND_LIBS opengl32)
     endif()
+elseif(API_BACKEND STREQUAL "android")
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+        message(FATAL_ERROR "API_BACKEND=android is only available when building for Android")
+    endif()
+
+    # GameActivity supplies the activity, the window and the input buffers; the editor adds only
+    # its own backend. find_package(game-activity) is the engine's, included further down.
+    list(APPEND BACKEND_SOURCES
+        ${EDITOR_DIR}/backend/BackendAndroid.cpp
+        # editor/Platform.cpp calls all nine HostServices functions; the Linux, Windows and Mac
+        # backends each supply them, and Android had none, so the editor's shared library failed
+        # to link on undefined HostServices symbols. This one is the engine's own Android
+        # implementation of them, not the game runtime's (JasperEngineAndroid reaches them through
+        # NativeEngine, the singleton the editor never creates).
+        ${JASPERENGINE_ROOT}/platform/android/HostServicesAndroid.cpp
+    )
+    list(APPEND BACKEND_LIBS
+        android
+        log
+        EGL
+        GLESv3
+        game-activity::game-activity_static
+    )
 elseif(API_BACKEND STREQUAL "mac")
     if(NOT APPLE)
         message(FATAL_ERROR "API_BACKEND=mac is only available on macOS")
@@ -345,11 +374,11 @@ elseif(API_BACKEND STREQUAL "mac")
         PROPERTIES LANGUAGE OBJCXX
     )
 else()
-    message(FATAL_ERROR "Unknown API_BACKEND '${API_BACKEND}' (expected linux, win, or mac)")
+    message(FATAL_ERROR "Unknown API_BACKEND '${API_BACKEND}' (expected linux, win, mac, or android)")
 endif()
 
 # The native backends share the frame loop and pick a renderer by GRAPHIC_BACKEND
-if(API_BACKEND STREQUAL "linux" OR API_BACKEND STREQUAL "win")
+if(API_BACKEND STREQUAL "linux" OR API_BACKEND STREQUAL "win" OR API_BACKEND STREQUAL "android")
     list(APPEND BACKEND_SOURCES ${EDITOR_DIR}/EditorFrame.cpp)
     if(GRAPHIC_BACKEND STREQUAL "vulkan")
         list(APPEND BACKEND_SOURCES ${EDITOR_DIR}/backend/renderer/RendererVulkan.cpp)
@@ -372,6 +401,11 @@ if(GRAPHIC_BACKEND STREQUAL "vulkan")
     add_definitions("-DSOKOL_VULKAN")
 elseif(GRAPHIC_BACKEND STREQUAL "metal")
     add_definitions("-DSOKOL_METAL")
+elseif(GRAPHIC_BACKEND STREQUAL "gles3")
+    add_definitions("-DSOKOL_GLES3")
+    # ImGui's GL renderer switches to <GLES3/gl3.h> and GLSL ES 3.00 on this define, instead of
+    # its desktop gl3w loader
+    add_definitions("-DIMGUI_IMPL_OPENGL_ES3")
 else()
     add_definitions("-DSOKOL_GLCORE")
 endif()
@@ -622,6 +656,11 @@ elseif(API_BACKEND STREQUAL "mac")
     # WindowMac.h for BackendMac, JasperEngineGameController.h from the shared Apple path
     include_directories (${JASPERENGINE_ROOT}/platform/mac)
     include_directories (${JASPERENGINE_ROOT}/platform/apple)
+elseif(API_BACKEND STREQUAL "android")
+    # AndroidTextInput.h, whose decoder the backend's soft-keyboard callback uses (the engine's
+    # own InputField reads the same format there)
+    include_directories (${JASPERENGINE_ROOT}/platform/android)
+    find_package(game-activity REQUIRED CONFIG)
 endif()
 include_directories (${JASPERENGINE_ROOT}/renders)
 
@@ -668,7 +707,13 @@ if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
 endif()
 
-add_subdirectory(libs/nfd)
+# NativeFileDialog (GTK, portal or the Win32/macOS dialogs) has no Android build, and Android
+# opens files through the Storage Access Framework instead: the editor's file dialogs are its
+# own ImGui ones there, so the library is simply absent.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_subdirectory(libs/nfd)
+    set(JASPERENGINE_EDITOR_FILE_DIALOG_LIB nfd)
+endif()
 add_subdirectory(libs/yaml-cpp)
 add_subdirectory(libs/ufbx)
 add_subdirectory(libs/tinyexr)
@@ -676,13 +721,13 @@ add_subdirectory(libs/tinyexr)
 # WebP images of glTF files, which the model cook transcodes
 add_subdirectory(editor/libs/draco)
 add_subdirectory(editor/libs/libwebp)
-jasperengine_apply_cxx_standard(nfd yaml-cpp tinyexr draco_decoder)
+jasperengine_apply_cxx_standard(${JASPERENGINE_EDITOR_FILE_DIALOG_LIB} yaml-cpp tinyexr draco_decoder)
 # The standards the project setting offers (editor/util/CxxStandards.h) and the compiler floors
 # the Play plugin checks (Generator::getToolchainFloorCheck), from the engine's definitions
 get_directory_property(JASPERENGINE_CXX_STANDARDS DIRECTORY ${JASPERENGINE_ROOT} DEFINITION JASPERENGINE_CXX_STANDARDS)
 string(REPLACE ";" "," JASPERENGINE_CXX_STANDARD_LIST "${JASPERENGINE_CXX_STANDARDS}")
 
-foreach(lib IN ITEMS nfd yaml-cpp ufbx tinyexr draco_decoder webp_decoder)
+foreach(lib IN ITEMS ${JASPERENGINE_EDITOR_FILE_DIALOG_LIB} yaml-cpp ufbx tinyexr draco_decoder webp_decoder)
     target_compile_options(${lib} PRIVATE ${EXTERNAL_WARNING_FLAG})
     # Reaches the headers they export to the editor, which ImGui gets below
     get_target_property(lib_includes ${lib} INTERFACE_INCLUDE_DIRECTORIES)
@@ -1794,7 +1839,7 @@ function(configure_jasperengine_editor_target target_name)
         ${OPENGL_LIBRARIES}
         Threads::Threads
         jasperengine
-        nfd
+        ${JASPERENGINE_EDITOR_FILE_DIALOG_LIB}
         yaml-cpp
         zstd
         bc7enc_rdo
@@ -1807,6 +1852,15 @@ function(configure_jasperengine_editor_target target_name)
         webp_decoder
         woff2_decoder
     )
+
+    if(API_BACKEND STREQUAL "android")
+        # The static libraries are searched left to right, so libjasperengine.a's own GL and EGL
+        # references are only known after it is named: GLESv3 and EGL in BACKEND_LIBS above were
+        # already passed by then and nothing pulled them in, and every symbol the engine's sokol
+        # uses (glGetIntegerv, glCreateProgram, eglGetProcAddress, ...) went unresolved in the
+        # editor's .so. Naming them again after the engine is what fixes the order.
+        target_link_libraries(${target_name} PRIVATE EGL GLESv3)
+    endif()
 
     if(WIN32)
         # dbghelp resolves the crash-report backtrace; ws2_32 is the MCP HTTP server's Winsock;
@@ -1874,18 +1928,35 @@ endfunction()
 # order the sources are listed here.
 set(JASPERENGINE_EDITOR_OBJECT_SOURCES ${JASPERENGINE_EDITOR_SOURCES})
 list(REMOVE_ITEM JASPERENGINE_EDITOR_OBJECT_SOURCES ${EDITOR_DIR}/main.cpp)
+# A shared library needs position independent code, and so do the objects that go into it.
+if(API_BACKEND STREQUAL "android")
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 add_library(jasperengine-editor-objects OBJECT ${JASPERENGINE_EDITOR_OBJECT_SOURCES})
 configure_jasperengine_editor_target(jasperengine-editor-objects)
 jasperengine_target_pch(jasperengine-editor-objects EDITOR)
 
-add_executable(
-    jasperengine-editor
+if(API_BACKEND STREQUAL "android")
+    # Android has no main(): GameActivity loads libjasperengine-editor.so from Java and calls
+    # the android_main of BackendAndroid.cpp on its GL thread. main.cpp is the desktop
+    # launcher (its command line, its CLI subcommands), so it stays out.
+    add_library(
+        jasperengine-editor
+        SHARED
 
-    ${PLATFORM_EXEC_FLAGS}
+        ${JASPERENGINE_EDITOR_ICON_OBJECTS}
+    )
+else()
+    add_executable(
+        jasperengine-editor
 
-    ${EDITOR_DIR}/main.cpp
-    ${JASPERENGINE_EDITOR_ICON_OBJECTS}
-)
+        ${PLATFORM_EXEC_FLAGS}
+
+        ${EDITOR_DIR}/main.cpp
+        ${JASPERENGINE_EDITOR_ICON_OBJECTS}
+    )
+endif()
 
 configure_jasperengine_editor_target(jasperengine-editor)
 target_link_libraries(jasperengine-editor PRIVATE jasperengine-editor-objects)

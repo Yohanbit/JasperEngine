@@ -7,6 +7,12 @@
 #include "PlatformMenu.h"
 #include "System.h"
 
+#include <string>
+
+// GameActivity's app state, declared where it is used (BackendAndroid.cpp includes the glue's
+// header); the editor's contract only needs the name.
+struct android_app;
+
 namespace jasperengine::editor{
 
     class Backend{
@@ -61,6 +67,19 @@ namespace jasperengine::editor{
             static void updateWindowTitle(const std::string& projectName);
 
             static void* getNFDWindowHandle();
+
+            #if defined(__ANDROID__)
+            // Android has no main(): GameActivity's android_main calls this on its GL thread
+            // (BackendAndroid.cpp), and the soft keyboard is requested by display.
+            static int runAndroid(struct android_app* app, int argc, char** argv);
+            static void showSoftKeyboard(bool show);
+            // The soft keyboard's text, drained once per frame into ImGui's input queue. The
+            // keyboard reports its whole text, so a deletion is only visible as a diff: this
+            // turns it into one backspace per removed character.
+            static void queueText(const std::u16string& utf16);
+            // the keyboard opened on another field: its text starts empty, not with the last one's
+            static void resetKeyboardText();
+            #endif
     };
 
 }

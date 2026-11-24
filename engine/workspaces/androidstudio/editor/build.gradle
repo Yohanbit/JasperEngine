@@ -1,0 +1,96 @@
+apply plugin: 'com.android.application'
+
+// The JasperEngine editor as an APK. It is NOT a game: there is no PROJECT_ROOT, no assets to
+// sync and no player. The native side is the editor's own CMake tree (the repository root's
+// CMakeLists.txt with API_BACKEND=android), which builds libjasperengine-editor.so from
+// editor/backend/BackendAndroid.cpp and the engine as a shared library beside it.
+// From this module's directory: androidstudio/editor -> androidstudio -> workspaces -> engine -> root
+def jasperengineRoot = "../../../.."
+def jasperengineRootAbs = file(jasperengineRoot).toString()
+
+// No shared Java is copied in. The editor's start report is its own class, in this module: it
+// names the editor's own paths and version, and this module must not see the game runtime's
+// MainActivity and lifecycle bridge, which link the game's native library. An earlier attempt to
+// Sync JasperBootLog into build/shared-java made Gradle 9 fight the source set over a generated
+// directory; a self-contained report has no such problem and one fewer moving part.
+
+android {
+    compileSdk 36
+    // the NDK AGP installs by default, pinned as app/build.gradle pins it: its Clang is above the
+    // C++20 floor engine/cmake/JasperEngineToolchain.cmake sets
+    ndkVersion = "28.2.13676358"
+
+    defaultConfig {
+        // Its own package: installing the editor must not replace a game, and a game must not
+        // replace the editor.
+        applicationId "com.jaspergameengine.editor"
+        minSdkVersion 24
+        targetSdkVersion 36
+        versionCode 1
+        // Identifiable against the game runtime's 1.0: the editor's own number, bumped by hand
+        // per build the user installs
+        versionName "0.1-editor-android"
+
+        externalNativeBuild {
+            cmake {
+                // arm64-v8a is every phone since 2017; the editor is not shipped through Play,
+                // so one ABI is one fast build (JASPERENGINE_ANDROID_ABIS overrides it)
+                abiFilters "arm64-v8a"
+                def onlyAbis = System.getenv("JASPERENGINE_ANDROID_ABIS")
+                if (onlyAbis) {
+                    abiFilters.clear()
+                    abiFilters(*onlyAbis.split(","))
+                }
+
+                arguments "-DANDROID_STL=c++_shared"
+
+                def launcher = System.getenv("CMAKE_CXX_COMPILER_LAUNCHER")
+                if (launcher) {
+                    arguments "-DCMAKE_C_COMPILER_LAUNCHER=" + launcher,
+                              "-DCMAKE_CXX_COMPILER_LAUNCHER=" + launcher
+                }
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // the boot report and its share sheet are debug-only, as in the game runtime
+            debuggable true
+        }
+        release {
+            debuggable false
+            minifyEnabled false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            // The editor's own top-level CMakeLists.txt: API_BACKEND detects Android
+            path jasperengineRootAbs + "/CMakeLists.txt"
+        }
+    }
+
+    buildFeatures {
+        prefab = true
+    }
+
+    sourceSets {
+        main {
+            // Only this module's Java plus a synced copy of the boot report. NOT
+            // platform/android/java wholesale: that directory holds the game runtime's
+            // MainActivity and its lifecycle bridge, which this app neither needs nor can load
+            // (they link the game's native library).
+            // "$buildDir", not layout.buildDirectory: this block is evaluated before the plugin
+            // creates the build directory, and the string is resolved when the task reads it
+            java.srcDirs = ['src/main/java', "$buildDir/shared-java"]
+        }
+    }
+
+    namespace = 'com.jaspergameengine.jasperengine.editor'
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.6.1"
+    implementation "androidx.games:games-activity:2.0.2"
+}

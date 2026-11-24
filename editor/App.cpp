@@ -3840,7 +3840,15 @@ bool editor::App::createProjectFromTemplate(const std::string& templateId, const
 }
 
 void editor::App::hubCreateProject(const hub::ProjectTemplate& info, const std::string& name, const std::filesystem::path& dir) {
-    if (hubCreation || projectLoading || pendingProjectChange) return;
+    // Three early returns that used to be silent. On a phone, "Create" appearing to do nothing is
+    // indistinguishable from a slow copy, and the boot report cannot say which it was: whichever
+    // of these fired, it is now in logcat.
+    if (hubCreation || projectLoading || pendingProjectChange) {
+        Out::warning("New project ignored: %s", hubCreation ? "a creation is still running"
+                      : projectLoading ? "a project is loading"
+                                       : "a project change is pending");
+        return;
+    }
     hubCreationError.clear();
     hubCreationPrompt = true;
     auto creation = std::make_unique<HubCreation>();
@@ -3850,6 +3858,7 @@ void editor::App::hubCreateProject(const hub::ProjectTemplate& info, const std::
     const hub::ProjectTemplate copyOf = info;
     const std::filesystem::path target = dir;
     // the files are copied off the main thread; the project then loads on it
+    Out::info("New project: '%s' into %s", name.c_str(), dir.string().c_str());
     creation->copy = std::async(std::launch::async, [copyOf, target]() {
         std::string error;
         if (!hub::templates::materialize(copyOf, target, error)) return error.empty() ? std::string("the copy failed") : error;
@@ -3876,10 +3885,12 @@ void editor::App::updateHubCreation() {
     const bool prompt = hubCreationPrompt;
     hubCreation.reset();
     if (!error.empty()) {
+        Out::error("New project failed at %s: %s", done.dir.string().c_str(), error.c_str());
         hubCreationError = error;
         hubMessage = "Could not create the project: " + error;
         return;
     }
+    Out::info("New project copied to %s, loading it", done.dir.string().c_str());
     hubCreationOpening = true;
     auto open = [this, done]() {
         requestProjectChange([this, done]() {
@@ -5956,6 +5967,15 @@ std::filesystem::path editor::App::getUserCacheBaseDir() {
         }
         return std::filesystem::temp_directory_path();
 
+    #elif defined(__ANDROID__)
+        // Android has no HOME and no XDG_CACHE_HOME, so the branch below fell through to
+        // temp_directory_path(): /data/local/tmp, which an app does not own, so the shader cache
+        // (App.cpp's own shaderCacheDir, used on the first frames) could not be created. The
+        // app's private files directory is exported by EditorPaths.java for this.
+        if (const char* config = std::getenv("JASPERENGINE_ANDROID_CONFIG_DIR"); config && *config) {
+            return std::filesystem::path(config).parent_path();
+        }
+        return std::filesystem::temp_directory_path();
     #else
         // Linux / other Unix: XDG Base Dir spec
         // Prefer $XDG_CACHE_HOME, fallback to ~/.cache

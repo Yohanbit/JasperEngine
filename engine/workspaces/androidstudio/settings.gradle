@@ -11,3 +11,6 @@ plugins {
 }
 include ':app'
 include ':jasperbridge'
+// The editor's own APK (com.jaspergameengine.editor). Its native side is the repository's
+// top-level CMakeLists.txt with API_BACKEND=android, not the engine's sample-project build.
+include ':editor'

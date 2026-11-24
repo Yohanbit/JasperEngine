@@ -15,7 +15,7 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "nfd.hpp"
+#include "util/FileDialogs.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1159,38 +1159,19 @@ void ProfilerWindow::saveTarget(){
             return;
         }
     }
-    nfdu8char_t* outPath = nullptr;
-    nfdsavedialogu8args_t args = {};
-    nfdfilteritem_t filter = {"Profiler capture", "json"};
-    args.filterList = &filter;
-    args.filterCount = 1;
-    args.defaultName = "capture.jetrace.json";
-    args.parentWindow = *static_cast<nfdwindowhandle_t*>(Backend::getNFDWindowHandle());
-    {
-        const diag::BusyScope busy("Native file dialog", 0);
-        if (NFD_SaveDialogU8_With(&outPath, &args) != NFD_OKAY)
-            return;
-    }
-    std::string path = outPath;
-    NFD_FreePathU8(outPath);
+    // Through FileDialogs, not NFD directly: Android has no native dialog and answers through the
+    // editor's own picker (editor/util/FileDialogs.h)
+    const std::string path = FileDialogs::saveFileDialog("", "capture.jetrace.json", "Profiler capture", "json");
+    if (path.empty())
+        return;
     std::string error;
     statusMessage = profiler::saveCapture(id, path, &error) ? "Saved " + path : "Not saved: " + error;
 }
 
 void ProfilerWindow::loadFromDialog(){
-    nfdu8char_t* outPath = nullptr;
-    nfdopendialogu8args_t args = {};
-    nfdfilteritem_t filter = {"Profiler capture", "json"};
-    args.filterList = &filter;
-    args.filterCount = 1;
-    args.parentWindow = *static_cast<nfdwindowhandle_t*>(Backend::getNFDWindowHandle());
-    {
-        const diag::BusyScope busy("Native file dialog", 0);
-        if (NFD_OpenDialogU8_With(&outPath, &args) != NFD_OKAY)
-            return;
-    }
-    std::string path = outPath;
-    NFD_FreePathU8(outPath);
+    const std::string path = FileDialogs::openFileDialogFiltered("", "Profiler capture", "json");
+    if (path.empty())
+        return;
     std::string error;
     if (!loadCapture(path, error))
         statusMessage = "Not loaded: " + error;

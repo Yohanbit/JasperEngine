@@ -102,8 +102,7 @@
             #include <OpenGL/gl.h>
         #endif
     #elif defined(SOKOL_GLES3)
-        // Android and the Linux GLES builds: an NDK sysroot has no GL/gl.h (the sibling include
-        // that failed the APK build in editor/util/GraphicUtils.cpp)
+        // Android and the Linux GLES builds: an NDK sysroot has no GL/gl.h, its GL is ES3
         #include <GLES3/gl3.h>
     #else
         #include <GL/gl.h>
