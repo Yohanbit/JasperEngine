@@ -82,6 +82,14 @@ and each is a crash of its own kind:
 `crash.txt` on disk. **Do not touch the asset code before a stack trace exists** — that is how the
 last three regressions were made.
 
+The infrastructure to fix it is already on this branch and verified: `AndroidImageLimits.h` holds the
+decoded-size limit that turns a 12 MP photo into a refusal instead of an allocation, and the same
+header's preflight is what the import path is supposed to call before decoding. The nine
+`engine/platform/android/Android*.h` headers are covered by `tools/android/verify.py`: 80 cases, a
+fuzz run over 400 209 inputs under ASan+UBSan, and each header compiled twice-included with
+`-Werror`. So D2 is not "write the fix", it is **find the one call site that does not use the guard
+that already exists** — which is exactly what a stack trace names and a guess does not.
+
 ### D3 — Play's data folder is refused as "Read-only file system"
 
 **Measured**: `Failed to create the Play mode data directory: Read-only file system`, twice, at the
@@ -178,6 +186,13 @@ being slow" — which is D1-D4.
 The problem to design against is the one that already happened twice: a change that fixed one thing
 and silently broke another (the inset that ate the taps; the IME call that emptied the field). A
 green build cannot see either. So the check has three layers, and the third is the one that matters.
+
+This branch already had a verifier before this plan was written, and the plan does not replace it:
+`tools/android/verify.py` builds the 80 Android subsystem cases, the seven self-check invariants,
+each header twice-included with `-Werror`, and the fuzz harness under ASan+UBSan — 90 s, no CMake.
+That is the **unit** layer. What it cannot see is the two mistakes that actually reached CI (a wrong
+class qualifier in Java, an unbalanced brace in a scripted edit) and the interaction the phone
+exercises; the layers below cover exactly those. Run both.
 
 ### Layer 1 — the compiler (`tools/android_precheck.sh`)
 
