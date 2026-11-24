@@ -56,9 +56,12 @@ final class EditorBootLog {
             dump("uncaught exception", throwable);
             if (previousHandler != null) previousHandler.uncaughtException(thread, throwable);
         });
-        // a start that hangs never reaches onStop: two timed dumps leave one on disk anyway
-        scheduleDump(20_000, "20 s after start");
+        // a start that hangs never reaches onStop: timed dumps leave a report on disk anyway
+        scheduleDump(5_000, "5 s after start");
+        scheduleDump(15_000, "15 s after start");
+        scheduleDump(30_000, "30 s after start");
         scheduleDump(60_000, "60 s after start");
+        exportNativeCrashesAsync();
     }
 
     /** One line in the report, so the order of events survives even when logcat is noisy. */
@@ -190,27 +193,87 @@ final class EditorBootLog {
     }
 
     private static void write(String text) {
+        writeToDownloads(FILE_NAME, text);
+    }
+
+    private static void exportNativeCrashesAsync() {
+        final Thread thread = new Thread(() -> {
+            if (appContext == null) return;
+            try {
+                final StringBuilder crashReport = new StringBuilder();
+                final File filesDir = appContext.getFilesDir();
+                if (filesDir != null && filesDir.exists()) {
+                    collectCrashFiles(filesDir, crashReport, 0);
+                }
+                if (crashReport.length() > 0) {
+                    writeToDownloads("crash.txt", crashReport.toString());
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "exportNativeCrashesAsync failed", e);
+            }
+        }, "crash-report-export");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private static void collectCrashFiles(File dir, StringBuilder out, int depth) {
+        if (depth > 4 || dir == null || !dir.isDirectory()) return;
+        final File[] children = dir.listFiles();
+        if (children == null) return;
+        for (File f : children) {
+            if (f.isDirectory()) {
+                collectCrashFiles(f, out, depth + 1);
+            } else {
+                final String name = f.getName();
+                if (name.equals("crash.txt") || name.equals("report.txt") || name.equals("summary.txt")) {
+                    out.append("=== ").append(f.getAbsolutePath()).append(" ===\n");
+                    appendFileTail(f, out, 64 * 1024);
+                    out.append("\n\n");
+                }
+            }
+        }
+    }
+
+    private static void appendFileTail(File f, StringBuilder out, int maxBytes) {
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+            long len = f.length();
+            if (len > maxBytes) {
+                //noinspection ResultOfMethodCallIgnored
+                fis.skip(len - maxBytes);
+                out.append("...(truncated)...\n");
+            }
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = fis.read(buf)) > 0) {
+                out.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            out.append("(error reading file: ").append(e).append(")\n");
+        }
+    }
+
+    private static void writeToDownloads(String fileName, String text) {
         // Downloads through MediaStore (API 29+): visible to the user's Files app and to Drive,
         // with no storage permission and no adb
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 final Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
                 final String where = MediaStore.MediaColumns.DISPLAY_NAME + "=?";
-                final String[] args = {FILE_NAME};
+                final String[] args = {fileName};
                 int updated = appContext.getContentResolver().update(collection,
                         new ContentValues(), where, args);
                 if (updated > 0) {
                     appContext.getContentResolver().delete(collection, where, args);
                 }
                 final ContentValues values = new ContentValues();
-                values.put(MediaStore.MediaColumns.DISPLAY_NAME, FILE_NAME);
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
                 values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
                 final Uri item = appContext.getContentResolver().insert(collection, values);
                 if (item != null) {
                     try (OutputStream stream = appContext.getContentResolver().openOutputStream(item, "wt")) {
                         if (stream != null) {
                             stream.write(text.getBytes(StandardCharsets.UTF_8));
-                            Log.i(TAG, "report written to Downloads/" + FILE_NAME);
+                            Log.i(TAG, "report written to Downloads/" + fileName);
                             return;
                         }
                     }
@@ -225,10 +288,10 @@ final class EditorBootLog {
             if (dir == null) return;
             //noinspection ResultOfMethodCallIgnored
             dir.mkdirs();
-            try (FileOutputStream stream = new FileOutputStream(new File(dir, FILE_NAME))) {
+            try (FileOutputStream stream = new FileOutputStream(new File(dir, fileName))) {
                 stream.write(text.getBytes(StandardCharsets.UTF_8));
             }
-            Log.i(TAG, "report written to the app's external files directory");
+            Log.i(TAG, "report written to the app's external files directory/" + fileName);
         } catch (Exception e) {
             Log.e(TAG, "the report could not be written at all", e);
         }

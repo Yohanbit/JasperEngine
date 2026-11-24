@@ -9860,7 +9860,8 @@ fs::path editor::Project::getUserDataPath() const{
     safewrite::EditorInternal ownRunData(path);   // Play's data folder, under .jasperengine (util/SafeWrite.h)
     FileUtils::createDirectories(path, ec);
     if (ec) {
-        Out::error("Failed to create the Play mode data directory: %s", ec.message().c_str());
+        Out::error("Failed to create the Play mode data directory '%s' (project '%s'): %s",
+            path.string().c_str(), projectPath.string().c_str(), ec.message().c_str());
         return getAssetsPath();
     }
     return path;
