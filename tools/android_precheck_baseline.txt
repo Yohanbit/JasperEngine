@@ -1,0 +1,9 @@
+# Findings that predate the Android port, with where they came from.
+#
+# The checker exists to catch regressions in the port. These two files ship with unbalanced
+# braces on the base branch; they are not on the editor's Android build path and fixing them
+# is a separate change. Keeping them here means a new finding is always worth reading.
+#
+# Format: the start of the finding's text, as the checker prints it.
+editor/mcp/McpSocket.cpp: braces
+editor/platform/AndroidTools.cpp: braces
