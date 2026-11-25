@@ -901,6 +901,7 @@ editor::PlatformMenuModel editor::App::buildMenuModel(){
 
     menu.menus.push_back(menuSubmenu("Help", {
         catalogItem("help.about"),
+        catalogItem("help.diagnostics"),
         menuSeparator(),
         catalogItem("help.documentation"),
         catalogItem("help.keyboardShortcuts"),
@@ -1532,6 +1533,9 @@ void editor::App::executeMenuCommand(const PlatformMenuCommand& command){
             break;
         case AppMenuCommand::About:
             aboutWindow.open();
+            break;
+        case AppMenuCommand::Diagnostics:
+            ImGui::OpenPopup("Diagnostics");
             break;
         case AppMenuCommand::ScriptsReload:
             ScriptReloadService::get().requestReload({}, true, ScriptReloadService::cppReloadEnabled());
@@ -3164,6 +3168,34 @@ void editor::App::show(){
     if (inspectorWindow->consumeShaderGlobalsRequest()) projectSettingsWindow.open(&project, "Graphics");
     editorSettingsWindow.show();
     aboutWindow.show();
+    if (ImGui::BeginPopupModal("Diagnostics", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static std::string cachedReport;
+        if (cachedReport.empty()) {
+            std::string report;
+            report += "Version: " + std::string(JASPERENGINE_EDITOR_VERSION) + "\n";
+#if defined(__aarch64__)
+            report += "ABI: arm64-v8a\n";
+#elif defined(__x86_64__)
+            report += "ABI: x86_64\n";
+#else
+            report += "ABI: other\n";
+#endif
+#if defined(__ANDROID__)
+            report += "Platform: Android (API " + std::to_string(android_get_device_api_level()) + ")\n";
+#endif
+            cachedReport = std::move(report);
+        }
+        ImGui::TextUnformatted(cachedReport.c_str());
+        ImGui::Separator();
+        if (ImGui::Button("Copy")) {
+            ImGui::SetClipboardText(cachedReport.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
     projectSettingsWindow.show();
     nativePluginDialog.show();
     // Create Terrain opens from the Hierarchy and from the Terrain window's empty state: drawn here, where it

@@ -316,6 +316,7 @@ std::vector<CommandDef> jasperengine::editor::defaultCommands() {
 
     b.group = "Help";
     b.menu("help.about", "About JasperEngine", AppMenuCommand::About);
+    b.menu("help.diagnostics", "Diagnostics...", AppMenuCommand::Diagnostics);
     b.menu("help.documentation", "Documentation", AppMenuCommand::Documentation, C::Global, "F1");
     b.menu("help.keyboardShortcuts", "Keyboard Shortcuts", AppMenuCommand::KeyboardShortcuts);
     b.menu("help.reportIssue", "Report an Issue...", AppMenuCommand::ReportIssue);
